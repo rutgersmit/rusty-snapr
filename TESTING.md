@@ -48,3 +48,14 @@ Wine is geen Windows. Dit moet je op een echte pc nalopen, het liefst naast de C
 - [ ] `Delete`/`Backspace` verwijdert de selectie; `Esc` deselecteert eerst en sluit pas daarna.
 - [ ] Het selectiekader komt niet mee bij kopiëren of opslaan.
 - [ ] Tooltips op alle toolbarknoppen, in de taal van Windows.
+
+### Fase 5: instellingen
+
+- [ ] Tray › *Instellingen…* opent het venster (een tweede keer: hetzelfde venster naar voren). Donkere titelbalk, zelfde indeling als de C#-versie.
+- [ ] Sneltoets opnemen: klik in het veld, druk bijv. `Ctrl+Shift+S`, `Alt+F9`, `Win+Shift+X` en `PrintScreen`. Letters en cijfers zonder Ctrl/Alt/Win worden genegeerd. Alt-combinaties openen geen systeemmenu.
+- [ ] Zolang het venster open is, doet de sneltoets niets; na *Opslaan* werkt de nieuwe sneltoets meteen, na *Annuleren* de oude.
+- [ ] *PrintScreen*-knop zet de sneltoets terug.
+- [ ] *Bladeren…* (of klik op het pad) kiest een map; een lang pad wordt in het midden ingekort.
+- [ ] "Starten met Windows": na opslaan staat `RustySnapr` in `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`; uitvinken haalt hem weg; na opnieuw inloggen start Snapr (Rust).
+- [ ] "Direct kopiëren" uit: na een capture blijft het klembord ongemoeid, en sluiten van de editor kopieert niet.
+- [ ] `Esc` annuleert, `Enter` slaat op (ook tijdens het opnemen); `Tab` stopt het opnemen.

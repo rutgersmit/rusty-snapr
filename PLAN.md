@@ -220,7 +220,7 @@ Na elke fase heb je iets dat werkt en dat je kunt uitproberen.
 | **2. Vastleggen** ✅ | Globale sneltoets, schermafbeelding, overlay (alle interacties), klembord, balloons | **Bruikbare MVP:** sneltoets → gebied → op het klembord |
 | **3. Editor-basis** ✅ | Venster en schaling, renderpijplijn, toolbar/statusbalk, pijl, undo/redo, kopiëren, opslaan, kopiëren bij sluiten | Pijlen zetten en delen |
 | **4. Editor compleet** ✅ | Pixeleren, nummers, selecteren, verplaatsen, handles, Delete, cursors, alle sneltoetsen, tooltips | Functioneel gelijk aan Snapr-editor |
-| **5. Instellingen** | Instellingenvenster, sneltoets opnemen, map kiezen, starten met Windows | Volledige pariteit |
+| **5. Instellingen** ✅ | Instellingenvenster, sneltoets opnemen, map kiezen, starten met Windows | Volledige pariteit |
 | **6. Afwerking** | DPI-wisselingen, gemengde DPI, `TaskbarCreated`, foutdialoog, golden-image-tests, handmatige checklist, README (NL), release-workflow | Release 1.0 als vervanger van Snapr |
 
 Verwachte omvang: ongeveer 3000–4000 regels Rust. Het meeste extra werk ten opzichte van C# zit in de zelfgetekende widgets en de Win32-wrappers, die WPF/WinForms nu gratis leveren.

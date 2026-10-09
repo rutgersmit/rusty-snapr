@@ -7,8 +7,9 @@ use windows::Win32::Foundation::HWND;
 use windows::Win32::System::Com::{CLSCTX_INPROC_SERVER, CoCreateInstance, CoTaskMemFree};
 use windows::Win32::UI::Shell::Common::COMDLG_FILTERSPEC;
 use windows::Win32::UI::Shell::{
-    FOS_OVERWRITEPROMPT, FOS_PATHMUSTEXIST, FileSaveDialog, IFileSaveDialog, IShellItem,
-    SHCreateItemFromParsingName, SIGDN_FILESYSPATH,
+    FOS_FORCEFILESYSTEM, FOS_OVERWRITEPROMPT, FOS_PATHMUSTEXIST, FOS_PICKFOLDERS, FileOpenDialog,
+    FileSaveDialog, IFileOpenDialog, IFileSaveDialog, IShellItem, SHCreateItemFromParsingName,
+    SIGDN_FILESYSPATH,
 };
 use windows::Win32::UI::WindowsAndMessaging::{MB_ICONERROR, MB_OK, MessageBoxW};
 use windows::core::PCWSTR;
@@ -46,6 +47,33 @@ pub fn save_png(owner: HWND, folder: &Path, file_name: &str, type_name: &str) ->
         }
 
         dialog.Show(Some(owner)).ok()?; // an error here means "cancelled"
+        let result = dialog.GetResult().ok()?;
+        let path = result.GetDisplayName(SIGDN_FILESYSPATH).ok()?;
+        let text = path.to_string().ok();
+        CoTaskMemFree(Some(path.0 as *const _));
+        text.map(PathBuf::from)
+    }
+}
+
+/// Asks for a folder, starting in `initial` if it exists. `None` if cancelled.
+pub fn pick_folder(owner: HWND, title: &str, initial: &Path) -> Option<PathBuf> {
+    let title = wide(title);
+    let initial = wide(&initial.to_string_lossy());
+    // SAFETY: COM is initialised on this thread at startup; all strings outlive the dialog.
+    unsafe {
+        let dialog: IFileOpenDialog =
+            CoCreateInstance(&FileOpenDialog, None, CLSCTX_INPROC_SERVER).ok()?;
+        let options = dialog.GetOptions().unwrap_or_default();
+        dialog
+            .SetOptions(options | FOS_PICKFOLDERS | FOS_FORCEFILESYSTEM)
+            .ok()?;
+        let _ = dialog.SetTitle(PCWSTR(title.as_ptr()));
+        if let Ok(item) =
+            SHCreateItemFromParsingName::<_, _, IShellItem>(PCWSTR(initial.as_ptr()), None)
+        {
+            let _ = dialog.SetFolder(&item);
+        }
+        dialog.Show(Some(owner)).ok()?;
         let result = dialog.GetResult().ok()?;
         let path = result.GetDisplayName(SIGDN_FILESYSPATH).ok()?;
         let text = path.to_string().ok();

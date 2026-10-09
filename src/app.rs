@@ -26,8 +26,8 @@ use windows::core::{PCWSTR, Result, w};
 use crate::platform::errors;
 use crate::platform::instance::SingleInstance;
 use crate::platform::tray::{self, BalloonIcon, TrayIcon};
-use crate::platform::{clipboard, locale, paths, tooltip, wide, window};
-use crate::ui::{editor, overlay};
+use crate::platform::{clipboard, locale, paths, startup, tooltip, wide, window};
+use crate::ui::{editor, overlay, settings};
 
 /// Different from the C# version's mutex, so both can run side by side.
 const SINGLE_INSTANCE_MUTEX: &str = r"Local\RustySnapr.SingleInstance";
@@ -41,6 +41,7 @@ const WM_OPEN_EDITOR: u32 = WM_APP + 2;
 const HOTKEY_ID: i32 = 0x5A1;
 
 const MENU_CAPTURE: u32 = 1;
+const MENU_SETTINGS: u32 = 2;
 const MENU_EXIT: u32 = 3;
 
 thread_local! {
@@ -50,8 +51,23 @@ thread_local! {
 /// The current settings (defaults if the app isn't running, e.g. during shutdown).
 pub fn settings() -> AppSettings {
     App::current()
-        .map(|app| app.settings.clone())
+        .map(|app| app.settings.borrow().clone())
         .unwrap_or_default()
+}
+
+/// Saves new settings from the settings window and applies "start with Windows".
+pub fn apply_settings(settings: AppSettings) {
+    if let Some(app) = App::current() {
+        app.apply_settings(settings);
+    }
+}
+
+/// The settings window closed: register the (possibly new) hotkey again.
+pub fn settings_closed() {
+    if let Some(app) = App::current() {
+        app.settings_window.set(None);
+        app.register_hotkey(false);
+    }
 }
 
 pub fn run() -> i32 {
@@ -107,9 +123,9 @@ pub struct App {
     tray: TrayIcon,
     /// Sent by Explorer when it (re)creates the taskbar; the tray icon must then be re-added.
     taskbar_created: u32,
-    settings: AppSettings,
-    #[allow(dead_code)] // saved from the settings window (phase 5)
+    settings: RefCell<AppSettings>,
     settings_path: PathBuf,
+    settings_window: Cell<Option<HWND>>,
     hotkey_registered: Cell<bool>,
     overlay_open: Cell<bool>,
     /// A finished capture waiting for WM_OPEN_EDITOR.
@@ -125,6 +141,7 @@ impl App {
         window::register_class(MAIN_WINDOW_CLASS, Some(main_wndproc), None, false)?;
         overlay::register_class()?;
         editor::register_class()?;
+        settings::register_class()?;
         let title = wide(APP_NAME);
         // SAFETY: the class was registered above; the title outlives the call.
         let hwnd = unsafe {
@@ -152,8 +169,9 @@ impl App {
             hwnd,
             tray,
             taskbar_created,
-            settings,
+            settings: RefCell::new(settings),
             settings_path,
+            settings_window: Cell::new(None),
             hotkey_registered: Cell::new(false),
             overlay_open: Cell::new(false),
             pending_capture: RefCell::new(None),
@@ -168,7 +186,7 @@ impl App {
     fn register_hotkey(&self, show_success: bool) {
         self.unregister_hotkey();
         let s = strings::get();
-        let gesture = self.settings.hotkey_gesture();
+        let gesture = self.settings.borrow().hotkey_gesture();
         let modifiers = HOT_KEY_MODIFIERS(gesture.modifiers.native()) | MOD_NOREPEAT;
         // SAFETY: registers a hotkey for our own window.
         let registered =
@@ -228,7 +246,7 @@ impl App {
     fn capture_finished(&self, result: Option<Bitmap>) {
         self.overlay_open.set(false);
         let Some(image) = result else { return };
-        if self.settings.copy_on_capture {
+        if self.settings.borrow().copy_on_capture {
             clipboard::set_image(self.hwnd, &image);
         }
         *self.pending_capture.borrow_mut() = Some(image);
@@ -250,15 +268,46 @@ impl App {
             self.hwnd,
             &[
                 Some((MENU_CAPTURE, s.tray_capture())),
+                Some((MENU_SETTINGS, s.tray_settings())),
                 None,
                 Some((MENU_EXIT, s.tray_exit())),
             ],
         );
         match chosen {
             Some(MENU_CAPTURE) => self.start_capture(),
+            Some(MENU_SETTINGS) => self.show_settings(),
             Some(MENU_EXIT) => self.exit(),
             _ => {}
         }
+    }
+
+    fn show_settings(&self) {
+        if let Some(hwnd) = self.settings_window.get() {
+            window::show(hwnd);
+            return;
+        }
+        let current = self.settings.borrow().clone();
+        match settings::open(&current) {
+            Ok(hwnd) => {
+                self.settings_window.set(Some(hwnd));
+                // The global hotkey would swallow the keys we want to record, so pause it.
+                self.unregister_hotkey();
+            }
+            Err(error) => errors::report_error("Settings", &error),
+        }
+    }
+
+    fn apply_settings(&self, mut new: AppSettings) {
+        new.fill_defaults(&paths::pictures().join("Screenshots"));
+        if let Err(error) = new.save(&self.settings_path) {
+            errors::report_error("Settings", &error);
+        }
+        if startup::apply(new.start_with_windows).is_err() {
+            let s = strings::get();
+            self.tray
+                .show_balloon(APP_NAME, s.startup_failed(), BalloonIcon::Warning);
+        }
+        *self.settings.borrow_mut() = new;
     }
 
     fn exit(&self) {

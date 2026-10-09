@@ -30,7 +30,8 @@ display -window root "$WORK/bg.png" &
 wineboot -i >/dev/null 2>&1
 sleep 1
 wine "$EXE" &
-sleep 6
+# A fresh Wine prefix needs a while before the tray icon is there.
+sleep 12
 import -window root "$WORK/screen.png"
 
 # Every capture opens the editor; Esc closes it (without changes nothing is copied again).
@@ -105,6 +106,18 @@ xdotool mousemove $TRAY click 1; sleep 3; xdotool mousemove 640 400 click 1; sle
 clipboard "$WORK/click.png"
 check "click copies the whole monitor" size_is "$WORK/click.png" 1280x800
 close_editor
+
+# Settings: tray menu › Settings…, record Ctrl+Alt+K, tick "Start with Windows", Save.
+# The window (454x322 client) is centred: shortcut field at 550,307, checkbox at 450,493,
+# Save at 800,538.
+xdotool mousemove $TRAY click 3; sleep 1; xdotool key Down Down Return; sleep 3
+xdotool mousemove 550 307 click 1; sleep 0.5; xdotool key ctrl+alt+k; sleep 0.3; xdotool key Tab
+xdotool mousemove 450 493 click 1; sleep 0.3
+xdotool mousemove 800 538 click 1; sleep 2
+SETTINGS_FILE=$(find "$WINEPREFIX/drive_c/users" -path "*RustySnapr/settings.json" | head -1)
+check "settings are saved" grep -q '"Hotkey": "Ctrl+Alt+K"' "$SETTINGS_FILE"
+check "start with Windows is saved" grep -q '"StartWithWindows": true' "$SETTINGS_FILE"
+check "start with Windows is registered" sh -c "wine reg query 'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run' /v RustySnapr 2>/dev/null | grep -q Snapr.exe"
 
 wineserver -k
 [ -n "${KEEP:-}" ] && echo "kept $WORK" || rm -rf "$WORK"

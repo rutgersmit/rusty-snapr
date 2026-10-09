@@ -8,11 +8,11 @@ use windows::Win32::Foundation::{COLORREF, RECT, SIZE};
 use windows::Win32::Graphics::Gdi::{
     BI_RGB, BITMAPINFO, BITMAPINFOHEADER, BitBlt, CLEARTYPE_QUALITY, CLIP_DEFAULT_PRECIS,
     COLORONCOLOR, CreateCompatibleDC, CreateDIBSection, CreateFontW, DEFAULT_CHARSET,
-    DEFAULT_PITCH, DIB_RGB_COLORS, DRAW_TEXT_FORMAT, DT_CENTER, DT_END_ELLIPSIS, DT_LEFT,
-    DT_NOPREFIX, DT_RIGHT, DT_SINGLELINE, DT_VCENTER, DeleteDC, DeleteObject, DrawTextW, FW_BOLD,
-    FW_NORMAL, GdiFlush, GetTextExtentPoint32W, HALFTONE, HBITMAP, HDC, HFONT, HGDIOBJ,
-    OUT_DEFAULT_PRECIS, SRCCOPY, SelectObject, SetBkMode, SetBrushOrgEx, SetStretchBltMode,
-    SetTextColor, StretchDIBits, TRANSPARENT,
+    DEFAULT_PITCH, DIB_RGB_COLORS, DRAW_TEXT_FORMAT, DT_CALCRECT, DT_CENTER, DT_END_ELLIPSIS,
+    DT_LEFT, DT_NOPREFIX, DT_PATH_ELLIPSIS, DT_RIGHT, DT_SINGLELINE, DT_VCENTER, DT_WORDBREAK,
+    DeleteDC, DeleteObject, DrawTextW, FW_BOLD, FW_NORMAL, GdiFlush, GetTextExtentPoint32W,
+    HALFTONE, HBITMAP, HDC, HFONT, HGDIOBJ, OUT_DEFAULT_PRECIS, SRCCOPY, SelectObject, SetBkMode,
+    SetBrushOrgEx, SetStretchBltMode, SetTextColor, StretchDIBits, TRANSPARENT,
 };
 use windows::core::{PCWSTR, Result};
 
@@ -149,7 +149,7 @@ impl Font {
         Self::segoe_ui_weight(pixel_height, FW_BOLD.0 as i32)
     }
 
-    fn segoe_ui_weight(pixel_height: i32, weight: i32) -> Font {
+    pub fn segoe_ui_weight(pixel_height: i32, weight: i32) -> Font {
         let face = wide("Segoe UI");
         // SAFETY: plain font creation; `face` outlives the call. Falls back to a default font if
         // Segoe UI is missing.
@@ -313,5 +313,78 @@ pub fn draw_bitmap(hdc: HDC, dest: IRect, image: &Bitmap) {
             DIB_RGB_COLORS,
             SRCCOPY,
         );
+    }
+}
+
+/// Draws text that wraps onto as many lines as needed within `rect`'s width.
+pub fn draw_wrapped(hdc: HDC, font: &Font, text: &str, rect: IRect, rgb: (u8, u8, u8)) {
+    draw_with_format(
+        hdc,
+        font,
+        text,
+        rect,
+        rgb,
+        DT_LEFT | DT_WORDBREAK | DT_NOPREFIX,
+    );
+}
+
+/// Height of `text` wrapped to `width`.
+pub fn measure_wrapped(hdc: HDC, font: &Font, text: &str, width: i32) -> i32 {
+    let mut text: Vec<u16> = text.encode_utf16().collect();
+    let mut rect = RECT {
+        left: 0,
+        top: 0,
+        right: width,
+        bottom: 0,
+    };
+    // SAFETY: the font is selected only while measuring and then restored.
+    unsafe {
+        let previous = SelectObject(hdc, font.handle().into());
+        DrawTextW(
+            hdc,
+            &mut text,
+            &mut rect,
+            DT_LEFT | DT_WORDBREAK | DT_NOPREFIX | DT_CALCRECT,
+        );
+        SelectObject(hdc, previous);
+    }
+    rect.bottom - rect.top
+}
+
+/// Draws a file system path on one line, shortening the middle with "…" if it doesn't fit.
+pub fn draw_path(hdc: HDC, font: &Font, text: &str, rect: IRect, rgb: (u8, u8, u8)) {
+    draw_with_format(
+        hdc,
+        font,
+        text,
+        rect,
+        rgb,
+        DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX | DT_PATH_ELLIPSIS,
+    );
+}
+
+fn draw_with_format(
+    hdc: HDC,
+    font: &Font,
+    text: &str,
+    rect: IRect,
+    rgb: (u8, u8, u8),
+    format: DRAW_TEXT_FORMAT,
+) {
+    let mut text: Vec<u16> = text.encode_utf16().collect();
+    let mut rect = RECT {
+        left: rect.x,
+        top: rect.y,
+        right: rect.right(),
+        bottom: rect.bottom(),
+    };
+    let color = COLORREF(rgb.0 as u32 | (rgb.1 as u32) << 8 | (rgb.2 as u32) << 16);
+    // SAFETY: the font is selected only while drawing and then restored.
+    unsafe {
+        let previous = SelectObject(hdc, font.handle().into());
+        SetBkMode(hdc, TRANSPARENT);
+        SetTextColor(hdc, color);
+        DrawTextW(hdc, &mut text, &mut rect, format);
+        SelectObject(hdc, previous);
     }
 }

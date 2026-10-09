@@ -13,7 +13,8 @@ Het plan staat in [PLAN.md](PLAN.md).
 | 2 | Sneltoets, schermafbeelding, selectie-overlay, klembord | klaar |
 | 3 | Editor: pijlen in vijf kleuren, ongedaan maken/opnieuw, kopiëren, opslaan als PNG | klaar |
 | 4 | Pixeleren, nummers, selecteren en verplaatsen, tooltips | klaar |
-| 5–6 | Instellingenvenster, afwerking | gepland |
+| 5 | Instellingenvenster: sneltoets opnemen, opslagmap, direct kopiëren, starten met Windows | klaar |
+| 6 | Afwerking | gepland |
 
 De editor is functioneel gelijk aan die van de C#-versie: pijlen, pixeleren en nummers, selecteren, verplaatsen, uiteinden verslepen, verwijderen, ongedaan maken, kopiëren en opslaan.
 
@@ -28,6 +29,8 @@ Deze versie kan tegelijk met de C#-Snapr draaien:
 | Starten met Windows (register) | `Snapr` | `RustySnapr` |
 
 Het formaat van `settings.json` is identiek; je kunt het bestand van de ene naar de andere map kopiëren.
+
+Eén bewuste afwijking: in het instellingenvenster kies je de opslagmap met *Bladeren…*; het pad zelf is niet als tekst te bewerken.
 
 Beide gebruiken standaard `PrintScreen`. Een sneltoets kan maar door één programma tegelijk gebruikt worden, dus geef één van de twee een andere sneltoets (bijvoorbeeld `Ctrl+Shift+S`).
 
