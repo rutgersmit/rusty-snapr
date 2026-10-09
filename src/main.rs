@@ -7,6 +7,8 @@
 mod app;
 #[cfg(windows)]
 mod platform;
+#[cfg(windows)]
+mod ui;
 
 #[cfg(windows)]
 fn main() {

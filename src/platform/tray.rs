@@ -15,7 +15,6 @@ use windows::core::{PCWSTR, Result};
 
 use super::{copy_wide, wide, window};
 
-#[allow(dead_code)] // used from phase 2 on (hotkey notifications)
 #[derive(Debug, Clone, Copy)]
 pub enum BalloonIcon {
     Info,
@@ -54,7 +53,6 @@ impl TrayIcon {
         unsafe { Shell_NotifyIconW(NIM_ADD, &self.data) }.ok()
     }
 
-    #[allow(dead_code)] // used from phase 2 on
     pub fn show_balloon(&self, title: &str, text: &str, icon: BalloonIcon) {
         let mut data = self.data;
         data.uFlags = NIF_INFO;

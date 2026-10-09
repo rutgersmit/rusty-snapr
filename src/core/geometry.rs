@@ -190,6 +190,28 @@ impl IRect {
         self.width <= 0 || self.height <= 0
     }
 
+    /// The overlapping part of two rectangles, if any.
+    pub fn intersect(&self, other: IRect) -> Option<IRect> {
+        let x = self.x.max(other.x);
+        let y = self.y.max(other.y);
+        let right = self.right().min(other.right());
+        let bottom = self.bottom().min(other.bottom());
+        (right > x && bottom > y).then(|| IRect::new(x, y, right - x, bottom - y))
+    }
+
+    pub fn offset(&self, dx: i32, dy: i32) -> IRect {
+        IRect::new(self.x + dx, self.y + dy, self.width, self.height)
+    }
+
+    pub fn inflate(&self, d: i32) -> IRect {
+        IRect::new(
+            self.x - d,
+            self.y - d,
+            self.width + 2 * d,
+            self.height + 2 * d,
+        )
+    }
+
     /// Moves and shrinks the rectangle so it lies inside a `width`×`height` image, keeping at
     /// least one pixel. Used when rounding at the screen edges pushes a selection just outside.
     pub fn clamp_within(&self, width: i32, height: i32) -> IRect {
@@ -235,6 +257,16 @@ mod tests {
             IRect::new(120, 70, 10, 10).clamp_within(100, 50),
             IRect::new(99, 49, 1, 1)
         );
+    }
+
+    #[test]
+    fn intersect() {
+        let a = IRect::new(0, 0, 10, 10);
+        assert_eq!(
+            a.intersect(IRect::new(5, 6, 10, 10)),
+            Some(IRect::new(5, 6, 5, 4))
+        );
+        assert_eq!(a.intersect(IRect::new(10, 0, 5, 5)), None);
     }
 
     #[test]

@@ -10,10 +10,10 @@ Het plan staat in [PLAN.md](PLAN.md).
 |---|---|---|
 | 0 | Skelet: exe met icoon/manifest/versie, CI, tray-icoon met *Afsluiten*, single instance, foutlog | klaar |
 | 1 | Kern: instellingen, sneltoetsen, teksten (EN/NL), foutlog, pixelator (gelijk aan de C#-versie) | klaar |
-| 2 | Sneltoets, schermafbeelding, selectie-overlay, klembord | gepland |
+| 2 | Sneltoets, schermafbeelding, selectie-overlay, klembord | klaar |
 | 3–6 | Editor, instellingenvenster, afwerking | gepland |
 
-In deze fase doet de exe nog niet meer dan een tray-icoon tonen.
+Je kunt nu een screenshot maken (sneltoets of klik op het tray-icoon), een gebied kiezen, en het resultaat staat op het klembord. Zolang de editor er nog niet is (fase 3), gaat elke selectie direct naar het klembord.
 
 ## Naast de C#-versie
 
@@ -45,6 +45,10 @@ rustup target add x86_64-pc-windows-gnu
 sudo apt install mingw-w64
 cargo build --release --target x86_64-pc-windows-gnu
 ```
+
+## Testen
+
+Zie [TESTING.md](TESTING.md): automatische tests (ook een end-to-end test onder Wine) en een checklist voor op Windows.
 
 ## Releases
 

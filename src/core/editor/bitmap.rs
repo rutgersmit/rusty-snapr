@@ -67,26 +67,34 @@ impl Bitmap {
         self.pixels[i..i + 4].try_into().unwrap()
     }
 
-    /// Copies a region into a new, standalone bitmap (so the full desktop capture can be dropped).
-    /// The region must lie inside the image.
+    /// Copies a region into a new, standalone bitmap. The region must lie inside the image.
     pub fn crop(&self, region: IRect) -> Bitmap {
+        Self::from_region(&self.pixels, self.width, self.height, region)
+    }
+
+    /// Copies `region` out of raw 4-byte-per-pixel data of a `width`×`height` image (such as a
+    /// screen capture) into a new bitmap. Alpha is set to opaque, because a screen capture leaves
+    /// it undefined. The region must lie inside the image.
+    pub fn from_region(pixels: &[u8], width: u32, height: u32, region: IRect) -> Bitmap {
         assert!(
             !region.is_empty()
                 && region.x >= 0
                 && region.y >= 0
-                && region.right() <= self.width as i32
-                && region.bottom() <= self.height as i32,
-            "crop region {region:?} outside {}x{} image",
-            self.width,
-            self.height
+                && region.right() <= width as i32
+                && region.bottom() <= height as i32,
+            "region {region:?} outside {width}x{height} image"
         );
+        let stride = width as usize * Self::BYTES_PER_PIXEL;
+        assert_eq!(pixels.len(), stride * height as usize);
+
         let row_bytes = region.width as usize * Self::BYTES_PER_PIXEL;
-        let mut pixels = Vec::with_capacity(row_bytes * region.height as usize);
+        let mut out = Vec::with_capacity(row_bytes * region.height as usize);
         for y in region.y..region.bottom() {
-            let start = y as usize * self.stride() + region.x as usize * Self::BYTES_PER_PIXEL;
-            pixels.extend_from_slice(&self.pixels[start..start + row_bytes]);
+            let start = y as usize * stride + region.x as usize * Self::BYTES_PER_PIXEL;
+            out.extend_from_slice(&pixels[start..start + row_bytes]);
         }
-        Bitmap::from_pixels(region.width as u32, region.height as u32, pixels)
+        out.chunks_exact_mut(4).for_each(|p| p[3] = 255);
+        Bitmap::from_pixels(region.width as u32, region.height as u32, out)
     }
 }
 
@@ -110,6 +118,13 @@ mod tests {
         assert_eq!((cropped.width(), cropped.height()), (2, 2));
         assert_eq!(cropped.pixel(0, 0)[0], 5);
         assert_eq!(cropped.pixel(1, 1)[0], 10);
+    }
+
+    #[test]
+    fn from_region_makes_pixels_opaque() {
+        let raw = vec![7u8; 3 * 2 * 4]; // alpha 7, as after a screen capture
+        let bitmap = Bitmap::from_region(&raw, 3, 2, IRect::new(1, 0, 2, 2));
+        assert_eq!(bitmap.pixel(1, 1), [7, 7, 7, 255]);
     }
 
     #[test]

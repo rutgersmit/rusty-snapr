@@ -1,24 +1,30 @@
 //! The tray app: startup, the hidden main window and the tray icon.
 
-use std::cell::OnceCell;
+use std::cell::{Cell, OnceCell};
 use std::path::PathBuf;
 use std::rc::Rc;
 
+use snapr_core::editor::Bitmap;
 use snapr_core::error_log::ErrorLog;
+use snapr_core::hotkey::vk;
 use snapr_core::settings::AppSettings;
 use snapr_core::{APP_NAME, DATA_FOLDER_NAME, strings};
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
+use windows::Win32::UI::Input::KeyboardAndMouse::{
+    HOT_KEY_MODIFIERS, MOD_NOREPEAT, RegisterHotKey, UnregisterHotKey,
+};
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DestroyWindow, DispatchMessageW, GetMessageW, MSG, PostQuitMessage,
     RegisterWindowMessageW, TranslateMessage, WINDOW_EX_STYLE, WINDOW_STYLE, WM_APP,
-    WM_CONTEXTMENU, WM_DESTROY, WM_RBUTTONUP,
+    WM_CONTEXTMENU, WM_DESTROY, WM_HOTKEY, WM_LBUTTONUP, WM_RBUTTONUP,
 };
 use windows::core::{PCWSTR, Result, w};
 
 use crate::platform::errors;
 use crate::platform::instance::SingleInstance;
-use crate::platform::tray::{self, TrayIcon};
-use crate::platform::{locale, paths, wide, window};
+use crate::platform::tray::{self, BalloonIcon, TrayIcon};
+use crate::platform::{clipboard, locale, paths, wide, window};
+use crate::ui::overlay;
 
 /// Different from the C# version's mutex, so both can run side by side.
 const SINGLE_INSTANCE_MUTEX: &str = r"Local\RustySnapr.SingleInstance";
@@ -27,6 +33,9 @@ const MAIN_WINDOW_CLASS: PCWSTR = w!("RustySnaprMain");
 /// Tray icon mouse events.
 const WM_TRAY: u32 = WM_APP + 1;
 
+const HOTKEY_ID: i32 = 0x5A1;
+
+const MENU_CAPTURE: u32 = 1;
 const MENU_EXIT: u32 = 3;
 
 thread_local! {
@@ -50,8 +59,9 @@ pub fn run() -> i32 {
         }
     };
     APP.with(|cell| {
-        let _ = cell.set(app);
+        let _ = cell.set(app.clone());
     });
+    app.register_hotkey(true);
 
     message_loop()
 }
@@ -69,16 +79,17 @@ fn message_loop() -> i32 {
 }
 
 pub struct App {
-    /// Hidden top-level window that receives tray events. Not a message-only window, because
-    /// those don't get the "TaskbarCreated" broadcast.
+    /// Hidden top-level window that receives tray and hotkey events. Not a message-only window,
+    /// because those don't get the "TaskbarCreated" broadcast.
     hwnd: HWND,
     tray: TrayIcon,
     /// Sent by Explorer when it (re)creates the taskbar; the tray icon must then be re-added.
     taskbar_created: u32,
-    #[allow(dead_code)] // used from phase 2 on (hotkey, capture)
     settings: AppSettings,
-    #[allow(dead_code)]
+    #[allow(dead_code)] // saved from the settings window (phase 5)
     settings_path: PathBuf,
+    hotkey_registered: Cell<bool>,
+    overlay_open: Cell<bool>,
 }
 
 impl App {
@@ -87,7 +98,8 @@ impl App {
         let mut settings = AppSettings::load(&settings_path);
         settings.fill_defaults(&paths::pictures().join("Screenshots"));
 
-        window::register_class(MAIN_WINDOW_CLASS, Some(main_wndproc))?;
+        window::register_class(MAIN_WINDOW_CLASS, Some(main_wndproc), None)?;
+        overlay::register_class()?;
         let title = wide(APP_NAME);
         // SAFETY: the class was registered above; the title outlives the call.
         let hwnd = unsafe {
@@ -117,6 +129,8 @@ impl App {
             taskbar_created,
             settings,
             settings_path,
+            hotkey_registered: Cell::new(false),
+            overlay_open: Cell::new(false),
         }))
     }
 
@@ -124,15 +138,95 @@ impl App {
         APP.with(|cell| cell.get().cloned())
     }
 
+    /// (Re)registers the configured hotkey and tells the user when Windows refuses it.
+    fn register_hotkey(&self, show_success: bool) {
+        self.unregister_hotkey();
+        let s = strings::get();
+        let gesture = self.settings.hotkey_gesture();
+        let modifiers = HOT_KEY_MODIFIERS(gesture.modifiers.native()) | MOD_NOREPEAT;
+        // SAFETY: registers a hotkey for our own window.
+        let registered =
+            unsafe { RegisterHotKey(Some(self.hwnd), HOTKEY_ID, modifiers, gesture.key as u32) }
+                .is_ok();
+        self.hotkey_registered.set(registered);
+
+        let name = gesture.to_string();
+        if registered {
+            if show_success {
+                self.tray.show_balloon(
+                    &s.running_title(),
+                    &s.running_text(&name),
+                    BalloonIcon::Info,
+                );
+            }
+        } else {
+            // Windows 11 binds PrintScreen to the Snipping Tool by default; explain how to free it.
+            let message = if gesture.key == vk::SNAPSHOT {
+                s.print_screen_in_use().to_string()
+            } else {
+                s.hotkey_in_use(&name)
+            };
+            self.tray
+                .show_balloon(s.hotkey_unavailable_title(), &message, BalloonIcon::Warning);
+        }
+    }
+
+    fn unregister_hotkey(&self) {
+        if self.hotkey_registered.replace(false) {
+            // SAFETY: unregisters the hotkey registered above.
+            unsafe {
+                let _ = UnregisterHotKey(Some(self.hwnd), HOTKEY_ID);
+            }
+        }
+    }
+
+    fn start_capture(&self) {
+        if self.overlay_open.get() {
+            return;
+        }
+        self.overlay_open.set(true);
+        let shown = overlay::show(Box::new(|result| {
+            if let Some(app) = App::current() {
+                app.capture_finished(result);
+            }
+        }));
+        if let Err(error) = shown {
+            // Otherwise every later capture would be ignored.
+            self.overlay_open.set(false);
+            errors::report_error("Capture", &error);
+        }
+    }
+
+    fn capture_finished(&self, result: Option<Bitmap>) {
+        self.overlay_open.set(false);
+        let Some(image) = result else { return };
+        // Until the editor exists (phase 3), the selection always goes to the clipboard.
+        if !clipboard::set_image(self.hwnd, &image) {
+            let s = strings::get();
+            self.tray
+                .show_balloon(APP_NAME, s.clipboard_busy(), BalloonIcon::Warning);
+        }
+    }
+
     fn show_tray_menu(&self) {
         let s = strings::get();
-        let chosen = tray::show_menu(self.hwnd, &[Some((MENU_EXIT, s.tray_exit()))]);
-        if chosen == Some(MENU_EXIT) {
-            self.exit();
+        let chosen = tray::show_menu(
+            self.hwnd,
+            &[
+                Some((MENU_CAPTURE, s.tray_capture())),
+                None,
+                Some((MENU_EXIT, s.tray_exit())),
+            ],
+        );
+        match chosen {
+            Some(MENU_CAPTURE) => self.start_capture(),
+            Some(MENU_EXIT) => self.exit(),
+            _ => {}
         }
     }
 
     fn exit(&self) {
+        self.unregister_hotkey();
         self.tray.remove();
         // SAFETY: our own window; WM_DESTROY then ends the message loop.
         unsafe {
@@ -150,9 +244,14 @@ extern "system" fn main_wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LP
         match msg {
             WM_TRAY => {
                 match lparam.0 as u32 {
+                    WM_LBUTTONUP => app.start_capture(),
                     WM_RBUTTONUP | WM_CONTEXTMENU => app.show_tray_menu(),
                     _ => {}
                 }
+                LRESULT(0)
+            }
+            WM_HOTKEY if wparam.0 == HOTKEY_ID as usize => {
+                app.start_capture();
                 LRESULT(0)
             }
             WM_DESTROY => {

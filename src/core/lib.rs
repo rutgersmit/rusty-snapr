@@ -1,6 +1,8 @@
 //! The platform-independent core of Snapr: settings, hotkeys, texts, error log and the editor
 //! logic. Nothing in here talks to Windows, so all of it runs under `cargo test` on any OS.
 
+pub mod capture;
+pub mod draw;
 pub mod editor;
 pub mod error_log;
 pub mod geometry;

@@ -2,5 +2,6 @@
 
 pub mod bitmap;
 pub mod pixelator;
+pub mod png;
 
 pub use bitmap::Bitmap;
