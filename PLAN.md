@@ -1,6 +1,8 @@
 # Plan: Snapr in Rust
 
-Doel: een Rust-versie van [Snapr](https://github.com/rutgersmit/snapr) met **precies dezelfde functies en hetzelfde gedrag**, als drop-in vervanger: dezelfde sneltoets, hetzelfde instellingenbestand, dezelfde opstartregistratie. Gebruikers merken alleen dat de exe veel kleiner is en sneller start.
+Doel: een Rust-versie van [Snapr](https://github.com/rutgersmit/snapr) met **precies dezelfde functies en hetzelfde gedrag**. De twee versies draaien voorlopig **naast elkaar**, zodat je de verschillen kunt onderzoeken; daarna blijft er één over (zie §11). Daarom krijgt de Rust-versie een eigen mutex, een eigen instellingenmap en een eigen opstartregistratie, maar wel exact hetzelfde instellingenformaat, zodat overstappen later triviaal is.
+
+**Status: alle fases zijn af.** Wat nog moet gebeuren is testen op echte Windows-pc's (zie [TESTING.md](TESTING.md)) en de verschillen afwegen (zie [VERSCHILLEN.md](VERSCHILLEN.md)).
 
 Dit plan is gebaseerd op een volledige doorlezing van de huidige C#/WPF-code (`src/Snapr`, ±2000 regels).
 
@@ -62,45 +64,44 @@ De code is opgesplitst in een **platformonafhankelijke kern** (testbaar op Linux
 ```
 rusty-snapr/
 ├── Cargo.toml
-├── build.rs                  # icoon + manifest + versie-resource
-├── assets/                   # snapr.ico, snapr.svg, app.manifest (overgenomen), snapr.rc
+├── build.rs                  # icoon + manifest + versie-resource (versie uit SNAPR_VERSION)
+├── assets/                   # snapr.ico, snapr.svg, app.manifest, fonts/ (reserve voor de cijfers, OFL)
 ├── .github/workflows/        # build.yml, release.yml
+├── tests/golden.rs           # golden-image test van alle annotaties (+ tests/golden/scene.png)
+├── examples/timings.rs       # ruwe tijden van de zware stappen op 4K
+├── tools/wine-e2e.sh         # end-to-end test onder Wine (Linux)
 └── src/
-    ├── main.rs               # entry: single instance, App aanmaken, message loop
-    ├── app.rs                # App-state: settings, tray, capture-flow, foutafhandeling
+    ├── main.rs               # entry
+    ├── app.rs                # App: settings, tray, sneltoets, capture-flow, foutafhandeling
     │
-    ├── core/                 # geen Win32: alles hier draait onder `cargo test` op Linux
-    │   ├── geometry.rs       # Point, Vec2, Rect, IRect (vervangt WPF Point/Vector/Rect/Int32Rect)
+    ├── core/                 # library-crate `snapr_core` (lib.rs hier), geen Win32: draait onder `cargo test` op Linux
+    │   ├── geometry.rs       # Point, Vector, Rect, IRect
     │   ├── settings.rs       # AppSettings + laden/opslaan (JSON-compatibel)
-    │   ├── hotkey.rs         # HotkeyGesture: parse/to_string, VK ↔ naam
+    │   ├── hotkey.rs         # HotkeyGesture: parse/to_string, VK ↔ WPF-naam, opnameregels
     │   ├── strings.rs        # alle teksten, EN/NL
     │   ├── error_log.rs      # snapr.log met rotatie naar .old
+    │   ├── capture.rs        # overlay-logica: klik of sleep, labelposities, dimmen
+    │   ├── draw.rs           # tiny-skia-hulpjes voor BGRA-buffers
     │   └── editor/
-    │       ├── annotation.rs # enum Annotation { Arrow, Number, Pixelate } + id
-    │       ├── arrow.rs      # geometrie, hit-test, bounds, render
-    │       ├── number.rs
-    │       ├── pixelate.rs
-    │       ├── pixelator.rs  # bit-voor-bit port van Pixelator.cs
+    │       ├── annotation.rs # enum Shape { Arrow, Number, Pixelate } + id
+    │       ├── arrow.rs, number.rs, pixelate.rs, pixelator.rs
     │       ├── history.rs    # undo/redo
-    │       ├── state.rs      # EditorState: tool, kleur, selectie, sleep-state-machine
-    │       └── render.rs     # flatten(image, annotations) -> Pixmap; selectie-chrome
+    │       ├── state.rs      # EditorState: tool, kleur, selectie, sleep-state-machine, sneltoetsen
+    │       ├── render.rs     # samenvoegen (op elke schaal)
+    │       ├── chrome.rs     # layout + tekenen van toolbar/statusbalk/canvas, iconen uit de XAML
+    │       └── bitmap.rs, png.rs
     │
-    ├── platform/             # dunne, zo klein mogelijke unsafe-laag
-    │   ├── window.rs         # venster-registratie, wndproc met catch_unwind, DPI-helpers
-    │   ├── tray.rs           # NotifyIcon-equivalent incl. balloons en contextmenu
-    │   ├── hotkey.rs         # RegisterHotKey op een message-only venster
-    │   ├── capture.rs        # BitBlt van het virtuele scherm naar een DIB
-    │   ├── clipboard.rs      # CF_DIB + "PNG", met retry
-    │   ├── startup.rs        # HKCU\...\Run
-    │   ├── dialogs.rs        # opslaan-dialoog, map kiezen, MessageBox
-    │   └── locale.rs         # is de UI-taal Nederlands?
+    ├── platform/             # dunne laag rond Win32; alle unsafe zit hier
+    │   ├── window.rs         # vensterklassen, state per venster (Rc<dyn Any>), catch_unwind, painting
+    │   ├── gdi.rs            # DIB-sections, memory-DC's, fonts, tekst, schalen
+    │   ├── tray.rs, tooltip.rs, dialogs.rs, clipboard.rs, startup.rs
+    │   ├── screen.rs         # schermafbeelding, monitors, DPI
+    │   └── errors.rs, instance.rs, locale.rs, paths.rs
     │
     └── ui/
-        ├── overlay.rs        # CaptureOverlayWindow
-        ├── editor_window.rs  # EditorWindow: koppelt EditorState aan een venster
-        ├── settings_window.rs
-        ├── widgets.rs        # zelfgetekende knop, toggle, kleurbolletje, checkbox
-        └── icons.rs          # de SVG-paden uit EditorWindow.xaml
+        ├── overlay.rs        # selectie-overlay
+        ├── editor.rs         # editorvenster: koppelt EditorState aan een venster
+        └── settings.rs       # instellingenvenster
 ```
 
 ---
@@ -113,12 +114,12 @@ Elke regel is een functie die nu werkt en straks precies zo moet werken.
 
 | Gedrag nu | Aanpak in Rust |
 |---|---|
-| Single instance via mutex `Local\Snapr.SingleInstance` | `CreateMutexW` met **dezelfde naam** + `ERROR_ALREADY_EXISTS`. Daardoor kunnen de oude en de nieuwe versie ook niet tegelijk draaien. |
+| Single instance via mutex `Local\Snapr.SingleInstance` | `CreateMutexW` met een **eigen naam** (`Local\RustySnapr.SingleInstance`) + `ERROR_ALREADY_EXISTS`, zodat de C#- en de Rust-versie naast elkaar kunnen draaien. Tray-tooltip en titels tonen "Snapr (Rust)" om ze uit elkaar te houden. |
 | Tray-icoon; linksklik = screenshot; menu: Screenshot maken / Instellingen… / Afsluiten | `Shell_NotifyIconW` met een callback-bericht. Rechtsklik: `SetForegroundWindow` → `TrackPopupMenu` → `PostMessage(WM_NULL)` (anders sluit het menu niet). |
 | Balloon "Snapr draait – druk op X" en waarschuwingen | `NIF_INFO` met `NIIF_INFO`/`NIIF_WARNING` |
 | Icoon opnieuw na herstart van Explorer (WinForms deed dat automatisch) | Luisteren naar `RegisterWindowMessageW("TaskbarCreated")` en het icoon opnieuw toevoegen |
 | Globale sneltoets, `MOD_NOREPEAT`, verborgen message-only venster | Zelfde: `RegisterHotKey` op een `HWND_MESSAGE`-venster, `WM_HOTKEY` |
-| Melding als de sneltoets bezet is (aparte tekst voor PrintScreen) | Zelfde logica in `App::register_hotkey` |
+| Melding als de sneltoets bezet is (aparte tekst voor PrintScreen) | Zelfde logica in `App::register_hotkey`. Let op bij naast elkaar draaien: beide versies willen standaard `PrintScreen`; de tweede die start krijgt dan deze melding. Stel in één van beide een andere sneltoets in (bijv. `Ctrl+Shift+S`). |
 | Sneltoets pauzeren zolang Instellingen open is | `suspend_hotkey()` / `register_hotkey()` bij openen/sluiten |
 | Hooguit één overlay en één instellingenvenster tegelijk | `Option<HWND>` in de App-state |
 
@@ -156,20 +157,20 @@ Elke regel is een functie die nu werkt en straks precies zo moet werken.
 
 | Gedrag nu | Aanpak in Rust |
 |---|---|
-| `%AppData%\Snapr\settings.json` met `Hotkey`, `SaveFolder`, `CopyOnCapture`, `StartWithWindows` | `#[serde(rename_all = "PascalCase", default)]`, dus **bestaande instellingen blijven werken**. Een kapot bestand → standaardwaarden, net als nu. |
+| `%AppData%\Snapr\settings.json` met `Hotkey`, `SaveFolder`, `CopyOnCapture`, `StartWithWindows` | Eigen map `%AppData%\RustySnapr\settings.json`, maar **exact hetzelfde formaat** (`#[serde(rename_all = "PascalCase", default)]`): een bestand van de C#-versie kun je zo overzetten. Een kapot bestand → standaardwaarden, net als nu. |
 | Sneltoetsformaat `"Ctrl+Shift+S"`, `"PrintScreen"`, cijfers als `"5"`, overige toetsen met WPF-namen (`F1`, `Insert`, `OemTilde`, `NumPad1`, …) | Tabel VK ↔ WPF-`Key`-naam in `core/hotkey.rs`, zodat oude strings goed worden ingelezen. Round-trip-tests. |
 | Sneltoets opnemen: Tab/Esc/Enter zonder modifier blijven navigatie; letters/cijfers/spatie alleen met Ctrl/Alt/Win; PrintScreen alleen via key-up; Alt-combinaties komen als `WM_SYSKEYDOWN` binnen | Zelfde regels in de opnameknop |
 | Map kiezen met Bladeren… | `IFileOpenDialog` met `FOS_PICKFOLDERS` |
-| Starten met Windows: `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`, waarde `Snapr` = `"pad\naar\exe"` | Zelfde sleutel en waardenaam. Bij een fout de bestaande "Kon niet instellen"-melding. |
+| Starten met Windows: `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`, waarde `Snapr` = `"pad\naar\exe"` | Zelfde sleutel, eigen waardenaam `RustySnapr`, zodat beide versies los aan/uit kunnen. Bij een fout de bestaande "Kon niet instellen"-melding. |
 
-Het instellingenvenster wordt ook zelfgetekend: label + sneltoetsveld (opnameknop), mappad + Bladeren…, twee checkboxes, Annuleren/Opslaan. **Eén kleine afwijking om voor te stellen:** het mappad wordt alleen-lezen en je kiest het via Bladeren…. Zo hebben we geen zelfgebouwd tekstinvoerveld nodig. Willen we vrije tekstinvoer houden, dan komt er een standaard Win32-`EDIT`-control (kost wat werk om die donker te krijgen).
+Het instellingenvenster wordt ook zelfgetekend: label + sneltoetsveld (opnameknop), mappad + Bladeren…, twee checkboxes, Annuleren/Opslaan. **Bewuste afwijking (akkoord):** het mappad is alleen-lezen en je kiest het via Bladeren…, zodat we geen zelfgebouwd tekstinvoerveld nodig hebben.
 
 ### Taal, logging en fouten (`Strings.cs`, `ErrorLog.cs`, `App.HookUnhandledExceptions`)
 
 | Gedrag nu | Aanpak in Rust |
 |---|---|
 | Engels, Nederlands als de Windows-weergavetaal Nederlands is | `GetUserDefaultUILanguage()`, primaire taal `LANG_DUTCH`. `strings.rs` met dezelfde `t(en, nl)`-functie en dezelfde teksten. |
-| Log in `%AppData%\Snapr\snapr.log`, rotatie naar `.old` boven 512 KB, loggen faalt nooit | Één-op-één port |
+| Log in `%AppData%\Snapr\snapr.log` (Rust: `%AppData%\RustySnapr\snapr.log`), rotatie naar `.old` boven 512 KB, loggen faalt nooit | Één-op-één port |
 | Onverwachte fout → loggen, één dialoog tegelijk, app blijft draaien | `std::panic::set_hook` logt. **Elke `wndproc` loopt binnen `catch_unwind`**: een panic die door een `extern "system"`-functie heen wil, breekt het proces af. Daarna een MessageBox met een guard tegen meerdere tegelijk. |
 
 ---
@@ -205,7 +206,7 @@ Op dezelfde manier als nu (`build.yml`, `release.yml`), maar met Rust:
 - **Build** (`windows-latest`, bij elke push/PR): `cargo fmt --check`, `cargo clippy -- -D warnings`, `cargo test`, `cargo build --release`, en `snapr.exe` uploaden als artifact.
 - **Kern-tests op Linux** (`ubuntu-latest`): `cargo test --lib` voor `core/`. Snel, en het houdt de kern platformonafhankelijk.
 - **Release:** bij een gepubliceerde GitHub-release met tag `0.2` / `v0.2.0` wordt de versie uit de tag gehaald en via een omgevingsvariabele door `build.rs` in de versie-resource gezet. Daarna `gh release upload <tag> target/release/Snapr.exe --clobber`. Handmatig starten met een tag blijft mogelijk.
-- Lokaal ontwikkelen kan ook op Linux/macOS: `cargo test` voor de kern, en `cargo xwin build --target x86_64-pc-windows-msvc` voor een Windows-exe.
+- Lokaal ontwikkelen kan ook op Linux: `cargo test --lib` voor de kern, en met mingw `cargo build --target x86_64-pc-windows-gnu` voor een Windows-exe (die is ook onder Wine te starten als rooktest).
 
 ---
 
@@ -215,13 +216,13 @@ Na elke fase heb je iets dat werkt en dat je kunt uitproberen.
 
 | Fase | Inhoud | Resultaat |
 |---|---|---|
-| **0. Skelet** | Cargo-project, `build.rs` (icoon, manifest, versie), CI, statische CRT, message loop, single instance, tray met Afsluiten | Lege tray-app die in CI een exe oplevert |
-| **1. Kern** | `geometry`, `settings`, `hotkey`, `strings`, `error_log`, `pixelator` + tests | Kern getest, compatibel met bestaande settings |
-| **2. Vastleggen** | Globale sneltoets, schermafbeelding, overlay (alle interacties), klembord, balloons | **Bruikbare MVP:** sneltoets → gebied → op het klembord |
-| **3. Editor-basis** | Venster en schaling, renderpijplijn, toolbar/statusbalk, pijl, undo/redo, kopiëren, opslaan, kopiëren bij sluiten | Pijlen zetten en delen |
-| **4. Editor compleet** | Pixeleren, nummers, selecteren, verplaatsen, handles, Delete, cursors, alle sneltoetsen, tooltips | Functioneel gelijk aan Snapr-editor |
-| **5. Instellingen** | Instellingenvenster, sneltoets opnemen, map kiezen, starten met Windows | Volledige pariteit |
-| **6. Afwerking** | DPI-wisselingen, gemengde DPI, `TaskbarCreated`, foutdialoog, golden-image-tests, handmatige checklist, README (NL), release-workflow | Release 1.0 als vervanger van Snapr |
+| **0. Skelet** ✅ | Cargo-project, `build.rs` (icoon, manifest, versie), CI, statische CRT, message loop, single instance, tray met Afsluiten | Lege tray-app die in CI een exe oplevert |
+| **1. Kern** ✅ | `geometry`, `settings`, `hotkey`, `strings`, `error_log`, `pixelator` + tests | Kern getest, compatibel met bestaande settings |
+| **2. Vastleggen** ✅ | Globale sneltoets, schermafbeelding, overlay (alle interacties), klembord, balloons | **Bruikbare MVP:** sneltoets → gebied → op het klembord |
+| **3. Editor-basis** ✅ | Venster en schaling, renderpijplijn, toolbar/statusbalk, pijl, undo/redo, kopiëren, opslaan, kopiëren bij sluiten | Pijlen zetten en delen |
+| **4. Editor compleet** ✅ | Pixeleren, nummers, selecteren, verplaatsen, handles, Delete, cursors, alle sneltoetsen, tooltips | Functioneel gelijk aan Snapr-editor |
+| **5. Instellingen** ✅ | Instellingenvenster, sneltoets opnemen, map kiezen, starten met Windows | Volledige pariteit |
+| **6. Afwerking** ✅ | DPI-wisselingen, gemengde DPI, `TaskbarCreated`, foutdialoog, golden-image-tests, handmatige checklist, README (NL), release-workflow | Release 1.0 als vervanger van Snapr |
 
 Verwachte omvang: ongeveer 3000–4000 regels Rust. Het meeste extra werk ten opzichte van C# zit in de zelfgetekende widgets en de Win32-wrappers, die WPF/WinForms nu gratis leveren.
 
@@ -240,8 +241,8 @@ Verwachte omvang: ongeveer 3000–4000 regels Rust. Het meeste extra werk ten op
 
 ---
 
-## 11. Open beslissingen
+## 11. Genomen beslissingen
 
-1. **Drop-in vervanger?** Voorstel: ja. Zelfde mutexnaam, zelfde `%AppData%\Snapr`, zelfde Run-sleutel. Daardoor vervangt rusty-snapr Snapr zonder dat je iets opnieuw hoeft in te stellen. Het alternatief is een eigen naam en map, zodat beide naast elkaar kunnen draaien.
-2. **Mapveld in Instellingen alleen-lezen** (kiezen via Bladeren…), of een echt tekstveld? Voorstel: alleen-lezen.
-3. **Exe-naam:** `Snapr.exe` (vervanger) of `rusty-snapr.exe`?
+1. **Naast elkaar, niet als vervanger.** De Rust-versie draait naast de C#-versie om de verschillen te onderzoeken; daarna wordt er één gekozen. Daarom: eigen mutex (`Local\RustySnapr.SingleInstance`), eigen map (`%AppData%\RustySnapr`), eigen Run-waarde (`RustySnapr`) en "Snapr (Rust)" in tray en titels. Het instellingenformaat blijft identiek. Als de Rust-versie wint, is "vervanger worden" alleen nog die namen terugzetten.
+2. **Mapveld alleen-lezen**, kiezen via Bladeren….
+3. **Exe-naam `Snapr.exe`**, net als de C#-versie (ze staan in verschillende mappen/releases).

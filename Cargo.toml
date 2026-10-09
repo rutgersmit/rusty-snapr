@@ -1,0 +1,60 @@
+[package]
+name = "snapr"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+description = "A small screenshot tool for Windows (Rust version of Snapr)"
+license = "MIT"
+publish = false
+
+# Platform-independent core (settings, hotkeys, texts, editor logic). Runs under `cargo test` on any OS.
+[lib]
+name = "snapr_core"
+path = "src/core/lib.rs"
+
+# The Windows app itself.
+[[bin]]
+name = "Snapr"
+path = "src/main.rs"
+
+[dependencies]
+ab_glyph = "0.2"
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+fastrand = "2"
+png = "0.18"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tiny-skia = { version = "0.12", default-features = false, features = ["std", "simd"] }
+
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.62", features = [
+    "Win32_Foundation",
+    "Win32_Globalization",
+    "Win32_Graphics_Dwm",
+    "Win32_Graphics_Gdi",
+    "Win32_Security",
+    "Win32_System_Com",
+    "Win32_System_DataExchange",
+    "Win32_System_LibraryLoader",
+    "Win32_System_Memory",
+    "Win32_System_Ole",
+    "Win32_System_Registry",
+    "Win32_System_Threading",
+    "Win32_UI_HiDpi",
+    "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_UI_Controls",
+    "Win32_UI_Shell",
+    "Win32_UI_Shell_Common",
+    "Win32_UI_WindowsAndMessaging",
+] }
+
+[build-dependencies]
+embed-resource = "3"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true
+# Must stay "unwind": window procedures catch panics so the tray app keeps running.
+panic = "unwind"
