@@ -1,6 +1,7 @@
 //! Thin, safe wrappers around the Win32 calls Snapr needs. All `unsafe` code lives here.
 
 pub mod clipboard;
+pub mod dialogs;
 pub mod errors;
 pub mod gdi;
 pub mod instance;

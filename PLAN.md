@@ -218,7 +218,7 @@ Na elke fase heb je iets dat werkt en dat je kunt uitproberen.
 | **0. Skelet** ✅ | Cargo-project, `build.rs` (icoon, manifest, versie), CI, statische CRT, message loop, single instance, tray met Afsluiten | Lege tray-app die in CI een exe oplevert |
 | **1. Kern** ✅ | `geometry`, `settings`, `hotkey`, `strings`, `error_log`, `pixelator` + tests | Kern getest, compatibel met bestaande settings |
 | **2. Vastleggen** ✅ | Globale sneltoets, schermafbeelding, overlay (alle interacties), klembord, balloons | **Bruikbare MVP:** sneltoets → gebied → op het klembord |
-| **3. Editor-basis** | Venster en schaling, renderpijplijn, toolbar/statusbalk, pijl, undo/redo, kopiëren, opslaan, kopiëren bij sluiten | Pijlen zetten en delen |
+| **3. Editor-basis** ✅ | Venster en schaling, renderpijplijn, toolbar/statusbalk, pijl, undo/redo, kopiëren, opslaan, kopiëren bij sluiten | Pijlen zetten en delen |
 | **4. Editor compleet** | Pixeleren, nummers, selecteren, verplaatsen, handles, Delete, cursors, alle sneltoetsen, tooltips | Functioneel gelijk aan Snapr-editor |
 | **5. Instellingen** | Instellingenvenster, sneltoets opnemen, map kiezen, starten met Windows | Volledige pariteit |
 | **6. Afwerking** | DPI-wisselingen, gemengde DPI, `TaskbarCreated`, foutdialoog, golden-image-tests, handmatige checklist, README (NL), release-workflow | Release 1.0 als vervanger van Snapr |

@@ -1,6 +1,6 @@
 //! The tray app: startup, the hidden main window and the tray icon.
 
-use std::cell::{Cell, OnceCell};
+use std::cell::{Cell, OnceCell, RefCell};
 use std::path::PathBuf;
 use std::rc::Rc;
 
@@ -10,6 +10,9 @@ use snapr_core::hotkey::vk;
 use snapr_core::settings::AppSettings;
 use snapr_core::{APP_NAME, DATA_FOLDER_NAME, strings};
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
+use windows::Win32::System::Com::{
+    COINIT_APARTMENTTHREADED, COINIT_DISABLE_OLE1DDE, CoInitializeEx,
+};
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     HOT_KEY_MODIFIERS, MOD_NOREPEAT, RegisterHotKey, UnregisterHotKey,
 };
@@ -24,7 +27,7 @@ use crate::platform::errors;
 use crate::platform::instance::SingleInstance;
 use crate::platform::tray::{self, BalloonIcon, TrayIcon};
 use crate::platform::{clipboard, locale, paths, wide, window};
-use crate::ui::overlay;
+use crate::ui::{editor, overlay};
 
 /// Different from the C# version's mutex, so both can run side by side.
 const SINGLE_INSTANCE_MUTEX: &str = r"Local\RustySnapr.SingleInstance";
@@ -32,6 +35,8 @@ const MAIN_WINDOW_CLASS: PCWSTR = w!("RustySnaprMain");
 
 /// Tray icon mouse events.
 const WM_TRAY: u32 = WM_APP + 1;
+/// Opens the editor for the last capture, once the overlay window is completely gone.
+const WM_OPEN_EDITOR: u32 = WM_APP + 2;
 
 const HOTKEY_ID: i32 = 0x5A1;
 
@@ -42,7 +47,19 @@ thread_local! {
     static APP: OnceCell<Rc<App>> = const { OnceCell::new() };
 }
 
+/// The current settings (defaults if the app isn't running, e.g. during shutdown).
+pub fn settings() -> AppSettings {
+    App::current()
+        .map(|app| app.settings.clone())
+        .unwrap_or_default()
+}
+
 pub fn run() -> i32 {
+    // Apartment-threaded COM for the shell's file dialogs.
+    // SAFETY: called once on the UI thread before any window exists.
+    unsafe {
+        let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
+    }
     let data_dir = paths::app_data().join(DATA_FOLDER_NAME);
     errors::init(ErrorLog::new(data_dir.join("snapr.log")));
     strings::init(locale::ui_language());
@@ -90,6 +107,8 @@ pub struct App {
     settings_path: PathBuf,
     hotkey_registered: Cell<bool>,
     overlay_open: Cell<bool>,
+    /// A finished capture waiting for WM_OPEN_EDITOR.
+    pending_capture: RefCell<Option<Bitmap>>,
 }
 
 impl App {
@@ -98,8 +117,9 @@ impl App {
         let mut settings = AppSettings::load(&settings_path);
         settings.fill_defaults(&paths::pictures().join("Screenshots"));
 
-        window::register_class(MAIN_WINDOW_CLASS, Some(main_wndproc), None)?;
+        window::register_class(MAIN_WINDOW_CLASS, Some(main_wndproc), None, false)?;
         overlay::register_class()?;
+        editor::register_class()?;
         let title = wide(APP_NAME);
         // SAFETY: the class was registered above; the title outlives the call.
         let hwnd = unsafe {
@@ -131,10 +151,11 @@ impl App {
             settings_path,
             hotkey_registered: Cell::new(false),
             overlay_open: Cell::new(false),
+            pending_capture: RefCell::new(None),
         }))
     }
 
-    fn current() -> Option<Rc<App>> {
+    pub fn current() -> Option<Rc<App>> {
         APP.with(|cell| cell.get().cloned())
     }
 
@@ -197,14 +218,24 @@ impl App {
         }
     }
 
+    /// Called while the overlay window is being destroyed. The editor opens a moment later, from
+    /// the message queue, so it isn't created (and activated) in the middle of that.
     fn capture_finished(&self, result: Option<Bitmap>) {
         self.overlay_open.set(false);
         let Some(image) = result else { return };
-        // Until the editor exists (phase 3), the selection always goes to the clipboard.
-        if !clipboard::set_image(self.hwnd, &image) {
-            let s = strings::get();
-            self.tray
-                .show_balloon(APP_NAME, s.clipboard_busy(), BalloonIcon::Warning);
+        if self.settings.copy_on_capture {
+            clipboard::set_image(self.hwnd, &image);
+        }
+        *self.pending_capture.borrow_mut() = Some(image);
+        window::post(self.hwnd, WM_OPEN_EDITOR);
+    }
+
+    fn open_editor(&self) {
+        let Some(image) = self.pending_capture.borrow_mut().take() else {
+            return;
+        };
+        if let Err(error) = editor::open(image) {
+            errors::report_error("Editor", &error);
         }
     }
 
@@ -248,6 +279,10 @@ extern "system" fn main_wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LP
                     WM_RBUTTONUP | WM_CONTEXTMENU => app.show_tray_menu(),
                     _ => {}
                 }
+                LRESULT(0)
+            }
+            WM_OPEN_EDITOR => {
+                app.open_editor();
                 LRESULT(0)
             }
             WM_HOTKEY if wparam.0 == HOTKEY_ID as usize => {

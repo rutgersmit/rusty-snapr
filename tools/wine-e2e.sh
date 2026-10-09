@@ -7,7 +7,7 @@
 #   xvfb-run -a -s "-screen 0 1280x800x24" tools/wine-e2e.sh
 #
 # Wine is not Windows: focus and global hotkeys behave differently without a window manager, so
-# captures are started from the tray icon here. See TESTING.md for what needs a real Windows PC.
+# captures are started from the tray icon here, and keys go to the window under the mouse. See TESTING.md for what needs a real Windows PC.
 set -u
 EXE=${1:-target/x86_64-pc-windows-gnu/release/Snapr.exe}
 WORK=$(mktemp -d)
@@ -32,9 +32,14 @@ wine "$EXE" &
 sleep 6
 import -window root "$WORK/screen.png"
 
+# Every capture opens the editor; Esc closes it (without changes nothing is copied again).
+# Without a window manager X sends keys to the window under the mouse, so point at the editor
+# (which is centred) first. On Windows the editor simply gets the focus.
+close_editor() { xdotool mousemove 640 400; sleep 0.5; xdotool key Escape; sleep 2; }
+
 # Drag a region.
 xdotool mousemove $TRAY click 1; sleep 3
-xdotool mousemove 300 250 mousedown 1 mousemove 500 300 mousemove 700 450; sleep 1; xdotool mouseup 1; sleep 3
+xdotool mousemove 300 250 mousedown 1 mousemove 500 300 mousemove 700 450; sleep 1; xdotool mouseup 1; sleep 4
 clipboard "$WORK/region.png"
 convert "$WORK/screen.png" -crop 400x200+300+250 +repage "$WORK/expected.png"
 check "drag copies the region (400x200)" size_is "$WORK/region.png" 400x200
@@ -42,12 +47,37 @@ check "region pixels match the screen" same_pixels "$WORK/region.png" "$WORK/exp
 xclip -selection clipboard -t image/bmp -o > "$WORK/region.bmp" 2>/dev/null
 check "DIB on the clipboard matches too" same_pixels "$WORK/region.bmp" "$WORK/expected.png"
 
-# Enter: all screens.
-xdotool mousemove $TRAY click 1; sleep 3; xdotool key Return; sleep 3
+# The editor shows the 400x200 image 1:1 at its minimum size, centred: image at (440,324).
+import -window root "$WORK/editor.png"
+check "editor shows the capture 1:1" same_pixels \
+    <(convert "$WORK/editor.png" -crop 400x200+440+324 +repage png:-) "$WORK/expected.png"
+
+# Draw a red arrow, undo, redo; closing puts the edited image on the clipboard.
+xdotool mousemove 470 360 mousedown 1 mousemove 600 420 mousemove 700 470; sleep 0.5; xdotool mouseup 1; sleep 1
+xdotool key ctrl+z; sleep 0.5; xdotool key ctrl+y; sleep 0.5
+close_editor
+clipboard "$WORK/edited.png"
+pixel() { convert "$1" -crop 1x1+$2+$3 -format '%[pixel:p]' info:; }
+check "closing copies the image with the arrow" [ "$(pixel "$WORK/edited.png" 145 91)" = "srgb(255,59,48)" ]
+
+# Saving with the dialog's defaults writes a PNG to Pictures\Screenshots.
+xdotool mousemove $TRAY click 1; sleep 3
+xdotool mousemove 300 250 mousedown 1 mousemove 700 450; sleep 1; xdotool mouseup 1; sleep 4
+xdotool key ctrl+s; sleep 4; xdotool key Return; sleep 3
+SAVED=$(find "$WINEPREFIX/drive_c/users" -path "*Screenshots/Snapr *.png" | head -1)
+check "Ctrl+S saves a PNG" size_is "$SAVED" 400x200
+close_editor
+
+# Enter: all screens. The editor scales it down to fit the work area.
+xdotool mousemove $TRAY click 1; sleep 3; xdotool key Return; sleep 4
 clipboard "$WORK/all.png"
 check "Enter copies all screens (1280x800)" size_is "$WORK/all.png" 1280x800
+EDITOR=$(xdotool search --name "Snapr \(Rust\)" | tail -1)
+read -r W H < <(xdotool getwindowgeometry "$EDITOR" | awk '/Geometry/ { split($2, s, "x"); print s[1], s[2] }')
+check "large captures fit in the editor ($W x $H)" [ "$W" -le 1178 ] && [ "$H" -le 736 ]
+close_editor
 
-# Escape cancels and leaves the clipboard alone.
+# Escape cancels and leaves the screen as it was.
 xdotool mousemove $TRAY click 1; sleep 3; xdotool key Escape; sleep 2
 import -window root "$WORK/after-escape.png"
 check "Escape closes the overlay" same_pixels \
@@ -59,7 +89,8 @@ echo -n | xclip -selection clipboard
 xdotool mousemove $TRAY click 1; sleep 3; xdotool mousemove 640 400 click 1; sleep 3
 clipboard "$WORK/click.png"
 check "click copies the whole monitor" size_is "$WORK/click.png" 1280x800
+close_editor
 
 wineserver -k
-rm -rf "$WORK"
+[ -n "${KEEP:-}" ] && echo "kept $WORK" || rm -rf "$WORK"
 [ $failures -eq 0 ] && echo "all passed" || { echo "$failures failed"; exit 1; }

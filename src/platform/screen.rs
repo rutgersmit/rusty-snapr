@@ -108,3 +108,24 @@ pub fn scale_at(point: (i32, i32)) -> f64 {
     }
     x.max(1) as f64 / 96.0
 }
+
+/// The work area (screen minus taskbar) of the monitor nearest to a screen point.
+pub fn work_area_at(point: (i32, i32)) -> IRect {
+    let mut info = MONITORINFO {
+        cbSize: size_of::<MONITORINFO>() as u32,
+        ..Default::default()
+    };
+    // SAFETY: MonitorFromPoint with DEFAULTTONEAREST always returns a monitor.
+    unsafe {
+        let monitor = MonitorFromPoint(
+            POINT {
+                x: point.0,
+                y: point.1,
+            },
+            MONITOR_DEFAULTTONEAREST,
+        );
+        let _ = GetMonitorInfoW(monitor, &mut info);
+    }
+    let r = info.rcWork;
+    IRect::new(r.left, r.top, r.right - r.left, r.bottom - r.top)
+}

@@ -6,17 +6,26 @@ use std::rc::Rc;
 
 use snapr_core::geometry::IRect;
 use windows::Win32::Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, RECT, WPARAM};
+use windows::Win32::Graphics::Dwm::{DWMWA_USE_IMMERSIVE_DARK_MODE, DwmSetWindowAttribute};
 use windows::Win32::Graphics::Gdi::{
     BeginPaint, CombineRgn, CreateRectRgn, DeleteObject, EndPaint, GetRegionData, GetUpdateRgn,
     HDC, HRGN, InvalidateRect, InvalidateRgn, PAINTSTRUCT, RGN_XOR, RGNDATA, RGNDATAHEADER,
 };
+use windows::Win32::Graphics::Gdi::{
+    GetMonitorInfoW, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromWindow,
+};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
-use windows::Win32::UI::Input::KeyboardAndMouse::{ReleaseCapture, SetCapture, SetFocus};
+use windows::Win32::UI::HiDpi::{AdjustWindowRectExForDpi, GetDpiForWindow};
+use windows::Win32::UI::Input::KeyboardAndMouse::{
+    GetKeyState, ReleaseCapture, SetCapture, SetFocus, TME_LEAVE, TRACKMOUSEEVENT, TrackMouseEvent,
+};
 use windows::Win32::UI::WindowsAndMessaging::{
-    CREATESTRUCTW, CreateWindowExW, DefWindowProcW, DestroyWindow, GWLP_USERDATA,
-    GetWindowLongPtrW, HCURSOR, HWND_TOPMOST, IDC_ARROW, LoadCursorW, RegisterClassW, SW_SHOW,
-    SWP_SHOWWINDOW, SetForegroundWindow, SetWindowLongPtrW, SetWindowPos, ShowWindow,
-    WINDOW_EX_STYLE, WINDOW_STYLE, WM_NCCREATE, WNDCLASSW, WNDPROC,
+    CREATESTRUCTW, CreateWindowExW, DefWindowProcW, DestroyWindow, GWLP_USERDATA, GetClientRect,
+    GetSystemMetrics, GetWindowLongPtrW, HICON, HWND_TOPMOST, IDC_ARROW, IMAGE_ICON,
+    LR_DEFAULTCOLOR, LoadCursorW, LoadImageW, RegisterClassExW, SM_CXICON, SM_CXSMICON, SM_CYICON,
+    SM_CYSMICON, SW_SHOW, SWP_NOACTIVATE, SWP_NOZORDER, SWP_SHOWWINDOW, SYSTEM_METRICS_INDEX,
+    SetCursor, SetForegroundWindow, SetWindowLongPtrW, SetWindowPos, ShowWindow, WINDOW_EX_STYLE,
+    WINDOW_STYLE, WM_NCCREATE, WNDCLASSEXW, WNDPROC,
 };
 use windows::core::{PCWSTR, Result};
 
@@ -29,23 +38,62 @@ pub fn instance() -> HINSTANCE {
         .unwrap_or_default()
 }
 
-/// Registers a window class. `cursor` is a system cursor such as `IDC_CROSS` (default: arrow).
-pub fn register_class(name: PCWSTR, wndproc: WNDPROC, cursor: Option<PCWSTR>) -> Result<()> {
-    // SAFETY: loads a shared system cursor.
-    let cursor =
-        unsafe { LoadCursorW(None, cursor.unwrap_or(IDC_ARROW)) }.unwrap_or(HCURSOR::default());
-    let class = WNDCLASSW {
+/// Registers a window class. `cursor` is a system cursor such as `IDC_CROSS` (default: arrow);
+/// `app_icon` gives its windows the Snapr icon.
+pub fn register_class(
+    name: PCWSTR,
+    wndproc: WNDPROC,
+    cursor: Option<PCWSTR>,
+    app_icon: bool,
+) -> Result<()> {
+    // SAFETY: loads a shared system cursor and our own icon resource.
+    let (cursor, icon, small_icon) = unsafe {
+        let cursor = LoadCursorW(None, cursor.unwrap_or(IDC_ARROW)).unwrap_or_default();
+        let (icon, small_icon) = if app_icon {
+            (
+                load_app_icon(SM_CXICON, SM_CYICON),
+                load_app_icon(SM_CXSMICON, SM_CYSMICON),
+            )
+        } else {
+            (HICON::default(), HICON::default())
+        };
+        (cursor, icon, small_icon)
+    };
+    let class = WNDCLASSEXW {
+        cbSize: size_of::<WNDCLASSEXW>() as u32,
         lpfnWndProc: wndproc,
         hInstance: instance(),
         lpszClassName: name,
         hCursor: cursor,
+        hIcon: icon,
+        hIconSm: small_icon,
         ..Default::default()
     };
     // SAFETY: `class` is fully initialised and `name` is a static string.
-    if unsafe { RegisterClassW(&class) } == 0 {
+    if unsafe { RegisterClassExW(&class) } == 0 {
         return Err(windows::core::Error::from_thread());
     }
     Ok(())
+}
+
+/// The app icon (resource 1) at a system metric size.
+///
+/// # Safety
+/// Plain resource loading; no preconditions beyond a valid module.
+unsafe fn load_app_icon(cx: SYSTEM_METRICS_INDEX, cy: SYSTEM_METRICS_INDEX) -> HICON {
+    // SAFETY: see above.
+    unsafe {
+        LoadImageW(
+            Some(instance()),
+            PCWSTR(std::ptr::without_provenance(1)), // MAKEINTRESOURCE(1)
+            IMAGE_ICON,
+            GetSystemMetrics(cx),
+            GetSystemMetrics(cy),
+            LR_DEFAULTCOLOR,
+        )
+        .map(|h| HICON(h.0))
+        .unwrap_or_default()
+    }
 }
 
 /// Creates a window that carries `state`. The window procedure gets it back with [`state`] and
@@ -306,5 +354,179 @@ fn update_rects(hwnd: HWND) -> Vec<IRect> {
         }
         let _ = DeleteObject(region.into());
         rects
+    }
+}
+
+/// Dark title bar, to match the dark editor (Windows 10 20H1 and later; ignored elsewhere).
+pub fn use_dark_title_bar(hwnd: HWND) {
+    let on: i32 = 1;
+    // SAFETY: passes a 4-byte BOOL for a documented attribute.
+    unsafe {
+        let _ = DwmSetWindowAttribute(
+            hwnd,
+            DWMWA_USE_IMMERSIVE_DARK_MODE,
+            (&raw const on).cast(),
+            size_of::<i32>() as u32,
+        );
+    }
+}
+
+/// Display scale of the monitor a window is on (1.0 = 96 DPI).
+pub fn scale_of(hwnd: HWND) -> f64 {
+    // SAFETY: plain query on our own window.
+    let dpi = unsafe { GetDpiForWindow(hwnd) };
+    if dpi == 0 { 1.0 } else { dpi as f64 / 96.0 }
+}
+
+/// The work area (screen minus taskbar) of the monitor a window is mostly on.
+pub fn work_area_of(hwnd: HWND) -> IRect {
+    let mut info = MONITORINFO {
+        cbSize: size_of::<MONITORINFO>() as u32,
+        ..Default::default()
+    };
+    // SAFETY: MonitorFromWindow with DEFAULTTONEAREST always returns a monitor.
+    unsafe {
+        let monitor = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
+        let _ = GetMonitorInfoW(monitor, &mut info);
+    }
+    let r = info.rcWork;
+    IRect::new(r.left, r.top, r.right - r.left, r.bottom - r.top)
+}
+
+/// Outer window size for a client size, including the frame at the given scale.
+pub fn outer_size(
+    client: (i32, i32),
+    style: WINDOW_STYLE,
+    ex_style: WINDOW_EX_STYLE,
+    scale: f64,
+) -> (i32, i32) {
+    let mut rect = RECT {
+        left: 0,
+        top: 0,
+        right: client.0,
+        bottom: client.1,
+    };
+    let dpi = (scale * 96.0).round() as u32;
+    // SAFETY: computes into a local RECT.
+    unsafe {
+        let _ = AdjustWindowRectExForDpi(&mut rect, style, false, ex_style, dpi);
+    }
+    (rect.right - rect.left, rect.bottom - rect.top)
+}
+
+/// The frame size (outer minus client) at a scale.
+pub fn frame_size(style: WINDOW_STYLE, ex_style: WINDOW_EX_STYLE, scale: f64) -> (i32, i32) {
+    outer_size((0, 0), style, ex_style, scale)
+}
+
+pub fn client_size(hwnd: HWND) -> (i32, i32) {
+    let mut rect = RECT::default();
+    // SAFETY: plain query on our own window.
+    unsafe {
+        let _ = GetClientRect(hwnd, &mut rect);
+    }
+    (rect.right - rect.left, rect.bottom - rect.top)
+}
+
+/// Moves and sizes a window without changing its z-order or activating it.
+pub fn set_bounds(hwnd: HWND, rect: IRect) {
+    // SAFETY: plain window management call on our own window.
+    unsafe {
+        let _ = SetWindowPos(
+            hwnd,
+            None,
+            rect.x,
+            rect.y,
+            rect.width,
+            rect.height,
+            SWP_NOZORDER | SWP_NOACTIVATE,
+        );
+    }
+}
+
+/// Shows a normal window and brings it to the front.
+pub fn show(hwnd: HWND) {
+    // SAFETY: plain window management calls on our own window.
+    unsafe {
+        let _ = ShowWindow(hwnd, SW_SHOW);
+        let _ = SetForegroundWindow(hwnd);
+    }
+}
+
+/// Asks for a `WM_MOUSELEAVE` when the mouse leaves the client area.
+pub fn track_mouse_leave(hwnd: HWND) {
+    let mut track = TRACKMOUSEEVENT {
+        cbSize: size_of::<TRACKMOUSEEVENT>() as u32,
+        dwFlags: TME_LEAVE,
+        hwndTrack: hwnd,
+        dwHoverTime: 0,
+    };
+    // SAFETY: `track` is fully initialised.
+    unsafe {
+        let _ = TrackMouseEvent(&mut track);
+    }
+}
+
+/// Sets the mouse cursor to a system cursor such as `IDC_HAND`.
+pub fn set_cursor(cursor: PCWSTR) {
+    // SAFETY: loads and sets a shared system cursor.
+    unsafe {
+        if let Ok(cursor) = LoadCursorW(None, cursor) {
+            SetCursor(Some(cursor));
+        }
+    }
+}
+
+/// Repaints the whole client area.
+pub fn invalidate_all(hwnd: HWND) {
+    // SAFETY: plain call on our own window.
+    unsafe {
+        let _ = InvalidateRect(Some(hwnd), None, false);
+    }
+}
+
+/// Whether a key (e.g. `VK_CONTROL`) is currently held down.
+pub fn is_key_down(key: u16) -> bool {
+    // SAFETY: plain query.
+    unsafe { GetKeyState(key as i32) < 0 }
+}
+
+/// Handles `WM_PAINT` by drawing the whole client area at once (for double-buffered windows).
+pub fn paint_all(hwnd: HWND, paint: impl FnOnce(HDC)) {
+    let mut ps = PAINTSTRUCT::default();
+    // SAFETY: BeginPaint/EndPaint pair on our own window.
+    unsafe {
+        let hdc = BeginPaint(hwnd, &mut ps);
+        paint(hdc);
+        let _ = EndPaint(hwnd, &ps);
+    }
+}
+
+/// The mouse position in a window's client coordinates.
+pub fn cursor_in_client(hwnd: HWND) -> (i32, i32) {
+    let mut point = windows::Win32::Foundation::POINT::default();
+    // SAFETY: plain queries on our own window.
+    unsafe {
+        let _ = windows::Win32::UI::WindowsAndMessaging::GetCursorPos(&mut point);
+        let _ = windows::Win32::Graphics::Gdi::ScreenToClient(hwnd, &mut point);
+    }
+    (point.x, point.y)
+}
+
+/// Asks a window to close as if the user clicked its close button.
+pub fn request_close(hwnd: HWND) {
+    post(hwnd, windows::Win32::UI::WindowsAndMessaging::WM_CLOSE);
+}
+
+/// Queues a message (without parameters) for one of our windows.
+pub fn post(hwnd: HWND, msg: u32) {
+    // SAFETY: posts a message to our own window.
+    unsafe {
+        let _ = windows::Win32::UI::WindowsAndMessaging::PostMessageW(
+            Some(hwnd),
+            msg,
+            WPARAM(0),
+            LPARAM(0),
+        );
     }
 }

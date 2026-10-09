@@ -40,7 +40,7 @@ const DASH_OFF: f64 = 3.0;
 pub type OnClose = Box<dyn FnOnce(Option<Bitmap>)>;
 
 pub fn register_class() -> Result<()> {
-    window::register_class(CLASS, Some(wndproc), Some(IDC_CROSS))
+    window::register_class(CLASS, Some(wndproc), Some(IDC_CROSS), false)
 }
 
 /// Captures the screen and shows the overlay. `on_close` gets the selected image, or `None` when

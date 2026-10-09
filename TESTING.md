@@ -23,3 +23,17 @@ Wine is geen Windows. Dit moet je op een echte pc nalopen, het liefst naast de C
 - [ ] **Twee schermen**, ook met verschillende schaal (100% + 150%) en met het tweede scherm links van of boven het hoofdscherm: de overlay dekt beide schermen precies, de hint staat op het scherm met de muis, en een klik pakt het juiste scherm.
 - [ ] Explorer herstarten (Taakbeheer › Windows Verkenner › Opnieuw starten): het tray-icoon komt terug.
 - [ ] Geen zichtbare vertraging bij slepen op een groot of 4K-scherm.
+
+### Fase 3: editor
+
+- [ ] Na het kiezen van een gebied opent de editor gecentreerd op het scherm met de muis, met de afbeelding 1:1 (scherp, niet geschaald). De editor heeft een donkere titelbalk en het Snapr-icoon.
+- [ ] De editor heeft meteen toetsenbordfocus: `Esc` sluit zonder eerst te klikken (ook na `Enter` in de overlay).
+- [ ] Een screenshot van een heel 4K-scherm past in het venster (verkleind, max. 92% van het werkgebied); de toolbar blijft bruikbaar.
+- [ ] Pijlen tekenen in alle vijf kleuren (knoppen én toetsen `1`–`5`); dikte, kop, witte rand en schaduw zien eruit als in de C#-versie, ook op 125%/150%.
+- [ ] `Ctrl+Z`, `Ctrl+Y`, `Ctrl+Shift+Z` en de knoppen; die zijn grijs als er niets ongedaan te maken is.
+- [ ] Hover-effect op knoppen en kleurbolletjes; handje als cursor boven knoppen, kruisje boven de afbeelding.
+- [ ] `Ctrl+C` zet het bewerkte beeld op het klembord ("Gekopieerd naar klembord").
+- [ ] `Ctrl+S` opent de opslaan-dialoog in de opslagmap met naam `Snapr jjjj-mm-dd uu.mm.ss.png`; het bestand klopt.
+- [ ] Sluiten (Esc, kruisje, Alt+F4) na een wijziging zet de bewerkte versie op het klembord; zonder wijziging blijft het klembord zoals het was.
+- [ ] Venster vergroten/verkleinen: de afbeelding schaalt mee omlaag, nooit omhoog; niet kleiner dan 580×260.
+- [ ] Editor naar een scherm met andere schaal slepen: toolbar en tekst schalen mee. (Afwijking: de C#-versie past dan ook de venstergrootte aan de inhoud aan; hier neemt het venster de door Windows voorgestelde grootte.)

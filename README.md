@@ -11,9 +11,11 @@ Het plan staat in [PLAN.md](PLAN.md).
 | 0 | Skelet: exe met icoon/manifest/versie, CI, tray-icoon met *Afsluiten*, single instance, foutlog | klaar |
 | 1 | Kern: instellingen, sneltoetsen, teksten (EN/NL), foutlog, pixelator (gelijk aan de C#-versie) | klaar |
 | 2 | Sneltoets, schermafbeelding, selectie-overlay, klembord | klaar |
-| 3–6 | Editor, instellingenvenster, afwerking | gepland |
+| 3 | Editor: pijlen in vijf kleuren, ongedaan maken/opnieuw, kopiëren, opslaan als PNG | klaar |
+| 4 | Pixeleren, nummers, selecteren en verplaatsen | gepland |
+| 5–6 | Instellingenvenster, afwerking | gepland |
 
-Je kunt nu een screenshot maken (sneltoets of klik op het tray-icoon), een gebied kiezen, en het resultaat staat op het klembord. Zolang de editor er nog niet is (fase 3), gaat elke selectie direct naar het klembord.
+Je kunt nu een screenshot maken (sneltoets of klik op het tray-icoon), een gebied kiezen en er pijlen op zetten. Pixeleren en nummers staan al in de toolbar, maar zijn tot fase 4 uitgeschakeld.
 
 ## Naast de C#-versie
 
