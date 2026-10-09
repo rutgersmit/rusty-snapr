@@ -35,6 +35,11 @@ pub fn register_class() -> Result<()> {
     window::register_class(CLASS, Some(wndproc), None, true)
 }
 
+/// Closes all editors, each copying its edited image like a normal close would.
+pub fn close_all() {
+    window::close_all(CLASS);
+}
+
 /// Opens an editor for a captured image, centred on the monitor under the mouse.
 pub fn open(image: Bitmap) -> Result<()> {
     let cursor = screen::cursor_position();
@@ -66,6 +71,7 @@ pub fn open(image: Bitmap) -> Result<()> {
             pressed: None,
             tracking_leave: false,
             status: strings::get().editor_hint().to_string(),
+            scaled_image: None,
             composite: None,
             fonts: Fonts::new(scale),
         }),
@@ -115,13 +121,16 @@ struct View {
     pressed: Option<Button>,
     tracking_leave: bool,
     status: String,
-    /// The image with committed annotations (minus the one being moved), and the state revision
-    /// and left-out annotation it belongs to.
+    /// The screenshot at the size it is shown, and that size.
+    scaled_image: Option<((i32, i32), Bitmap)>,
+    /// `scaled_image` with the committed annotations (minus the one being moved) drawn at screen
+    /// size, and what it was made for.
     composite: Option<(CompositeKey, Bitmap)>,
     fonts: Fonts,
 }
 
-type CompositeKey = (u64, Option<u32>);
+/// State revision, the annotation left out, and the size shown.
+type CompositeKey = (u64, Option<u32>, (i32, i32));
 
 struct Fonts {
     text: Font,
@@ -300,7 +309,7 @@ impl Editor {
             let target = layout.image_pixels();
             if state.has_overlay() {
                 let mut frame = composite.clone();
-                state.render_overlay(&mut frame);
+                state.render_overlay(&mut frame, zoom_of(composite, state.image()));
                 gdi::draw_bitmap(back_dc.hdc(), target, &frame);
             } else {
                 gdi::draw_bitmap(back_dc.hdc(), target, composite);
@@ -348,16 +357,36 @@ impl Editor {
         gdi::blit(hdc, 0, 0, width, height, back_dc.hdc(), 0, 0);
     }
 
-    /// Rebuilds the cached image-with-annotations when the annotations changed, or when a
-    /// different annotation is being moved (that one is drawn on top every frame instead).
+    /// Rebuilds the cached screen-size image when the window size or the annotations changed.
+    /// Everything is drawn at the size it is shown, like WPF's Viewbox does: the screenshot is
+    /// scaled once, annotations are drawn as shapes at that scale. Only the annotation being moved
+    /// is left out; it is drawn on top every frame.
     fn update_composite(&self) {
         let state = self.state.borrow();
         let mut view = self.view.borrow_mut();
-        let key = (state.revision(), state.live_id());
-        let current = view.composite.as_ref().map(|(k, _)| *k);
-        if current != Some(key) {
-            view.composite = Some((key, state.render_base(key.1)));
+        let shown = view.layout.image_pixels();
+        let size = (shown.width.max(1), shown.height.max(1));
+        let key = (state.revision(), state.live_id(), size);
+        if view.composite.as_ref().map(|(k, _)| *k) == Some(key) {
+            return;
         }
+
+        if view.scaled_image.as_ref().map(|(s, _)| *s) != Some(size) {
+            let image = state.image();
+            let scaled = if size == (image.width() as i32, image.height() as i32) {
+                image.clone()
+            } else {
+                gdi::scale_bitmap(image, size.0, size.1).unwrap_or_else(|_| image.clone())
+            };
+            view.scaled_image = Some((size, scaled));
+        }
+        let Some((_, scaled)) = &view.scaled_image else {
+            return;
+        };
+        let mut composite = scaled.clone();
+        let zoom = zoom_of(&composite, state.image());
+        state.draw_committed(&mut composite, key.1, zoom);
+        view.composite = Some((key, composite));
     }
 
     // ---- Tooltips ------------------------------------------------------------------------
@@ -589,4 +618,9 @@ fn tooltip_text(button: Button) -> &'static str {
         Button::Copy => s.copy(),
         Button::Save => s.save(),
     }
+}
+
+/// How much smaller the shown image is than the screenshot.
+fn zoom_of(shown: &Bitmap, image: &Bitmap) -> f32 {
+    shown.width() as f32 / image.width() as f32
 }

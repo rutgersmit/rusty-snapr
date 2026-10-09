@@ -74,7 +74,7 @@ impl Number {
 
     /// The rounded rectangle: square for one digit, wider for more.
     fn marker(&self) -> Rect {
-        let width = self.size.max(self.text().width as f64 + self.size * 0.5);
+        let width = self.size.max(self.text(1.0).width as f64 + self.size * 0.5);
         Rect::new(
             self.center.x - width / 2.0,
             self.center.y - self.size / 2.0,
@@ -83,10 +83,11 @@ impl Number {
         )
     }
 
-    fn text(&self) -> TextLayout {
+    /// The text laid out at `zoom` times its size in image pixels.
+    fn text(&self, zoom: f32) -> TextLayout {
         let font = font();
         // WPF sizes text by its em height; ab_glyph's scale is the ascent-to-descent height.
-        let em = (self.size * 0.58) as f32;
+        let em = (self.size * 0.58) as f32 * zoom;
         let units_per_em = font.units_per_em().unwrap_or(1000.0);
         let scale = PxScale::from(em * font.height_unscaled() / units_per_em);
         let scaled = font.as_scaled(scale);
@@ -110,6 +111,7 @@ impl Number {
         }
     }
 
+    /// Draws the marker. `transform` may scale uniformly and translate (not rotate).
     pub fn render(&self, pixmap: &mut PixmapMut<'_>, transform: Transform) {
         let marker = self.marker();
         let radius = (self.size * 0.28) as f32;
@@ -152,9 +154,14 @@ impl Number {
         } else {
             Rgb(255, 255, 255)
         };
-        let text = self.text();
-        let left = self.center.x as f32 - text.width / 2.0 + transform.tx;
-        let top = self.center.y as f32 - text.height / 2.0 + transform.ty;
+        let zoom = transform.sx;
+        let text = self.text(zoom);
+        let (cx, cy) = (
+            self.center.x as f32 * zoom + transform.tx,
+            self.center.y as f32 * zoom + transform.ty,
+        );
+        let left = cx - text.width / 2.0;
+        let top = cy - text.height / 2.0;
         draw_glyphs(pixmap, &text.glyphs, left, top, text_color);
     }
 }
@@ -206,6 +213,27 @@ mod tests {
         let two = marker(12, Rgb(255, 59, 48)).bounds();
         assert!(two.width > 26.0 && two.height == 26.0, "{two:?}");
         assert_eq!(two.x + two.width / 2.0, 50.0, "stays centred");
+    }
+
+    #[test]
+    fn scaled_rendering_matches_a_scaled_marker() {
+        // Drawing at half size with a transform puts the box where half the coordinates say.
+        let mut pixels = vec![0u8; 60 * 40 * 4];
+        let mut pixmap = PixmapMut::from_bytes(&mut pixels, 60, 40).unwrap();
+        pixmap.fill(tiny_skia::Color::from_rgba8(128, 128, 128, 255));
+        marker(1, Rgb(0x0A, 0x84, 0xFF)).render(&mut pixmap, Transform::from_scale(0.5, 0.5));
+        let at =
+            |x: usize, y: usize| -> [u8; 3] { pixels[(y * 60 + x) * 4..][..3].try_into().unwrap() };
+        assert_eq!(
+            at(20, 15),
+            [0xFF, 0x84, 0x0A],
+            "box corner area at half scale"
+        );
+        assert_eq!(
+            at(40, 30),
+            [128, 128, 128],
+            "nothing beyond the half-size box"
+        );
     }
 
     #[test]

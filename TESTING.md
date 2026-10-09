@@ -2,7 +2,9 @@
 
 ## Automatisch
 
-- `cargo test --lib`: de kern (instellingen, sneltoetsen, pixelator, overlay-logica, PNG). Draait op elk OS.
+- `cargo test --lib`: de kern (instellingen, sneltoetsen, pixelator, editorlogica, overlay-logica, PNG). Draait op elk OS.
+- `cargo test --test golden`: tekent een vaste scène met alle soorten annotaties en vergelijkt die met `tests/golden/scene.png`. Na een bedoelde wijziging: `SNAPR_UPDATE_GOLDEN=1 cargo test --test golden`.
+- `cargo run --release --example timings`: ruwe tijden van de zware stappen op 4K-formaat.
 - `tools/wine-e2e.sh`: start `Snapr.exe` onder Wine op een virtueel X-scherm en test met `xdotool` het selecteren en het klembord. Instructies staan bovenin het script.
 
 ## Handmatig op Windows
@@ -59,3 +61,10 @@ Wine is geen Windows. Dit moet je op een echte pc nalopen, het liefst naast de C
 - [ ] "Starten met Windows": na opslaan staat `RustySnapr` in `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`; uitvinken haalt hem weg; na opnieuw inloggen start Snapr (Rust).
 - [ ] "Direct kopiëren" uit: na een capture blijft het klembord ongemoeid, en sluiten van de editor kopieert niet.
 - [ ] `Esc` annuleert, `Enter` slaat op (ook tijdens het opnemen); `Tab` stopt het opnemen.
+
+### Fase 6: afwerking
+
+- [ ] *Afsluiten* in het tray-menu met een open, bewerkte editor: de bewerkte versie staat daarna op het klembord.
+- [ ] `Enter` in de overlay op twee 4K-schermen: de editor opent vlot, en tekenen en verslepen blijven vloeiend.
+- [ ] Een fout veroorzaken is lastig; controleer in elk geval dat `%AppData%\RustySnapr\snapr.log` niet ontstaat bij normaal gebruik.
+- [ ] Vergelijk opstarttijd en geheugengebruik (Taakbeheer) met de C#-versie.

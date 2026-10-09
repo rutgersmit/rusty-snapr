@@ -388,3 +388,24 @@ fn draw_with_format(
         SelectObject(hdc, previous);
     }
 }
+
+/// A smoothly scaled copy of a bitmap (GDI's HALFTONE filter), e.g. to show a large screenshot
+/// in a smaller window.
+pub fn scale_bitmap(image: &Bitmap, width: i32, height: i32) -> Result<Bitmap> {
+    let mut target = Dib::new(width.max(1), height.max(1))?;
+    {
+        let dc = MemDc::new(target.handle())?;
+        draw_bitmap(
+            dc.hdc(),
+            IRect::new(0, 0, target.width(), target.height()),
+            image,
+        );
+    }
+    let mut pixels = target.pixels_mut().to_vec();
+    pixels.chunks_exact_mut(4).for_each(|p| p[3] = 255);
+    Ok(Bitmap::from_pixels(
+        target.width() as u32,
+        target.height() as u32,
+        pixels,
+    ))
+}

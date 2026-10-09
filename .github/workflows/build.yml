@@ -26,7 +26,7 @@ jobs:
         run: cargo clippy --all-targets -- -D warnings
 
       - name: Test core
-        run: cargo test --lib
+        run: cargo test --lib --test golden
 
   windows:
     name: Windows

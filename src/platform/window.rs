@@ -530,3 +530,43 @@ pub fn post(hwnd: HWND, msg: u32) {
         );
     }
 }
+
+/// Asks every window of a class on this thread to close (`WM_CLOSE`, handled synchronously), so
+/// each gets the chance to finish up, e.g. an editor copying its image.
+pub fn close_all(class: PCWSTR) {
+    use windows::Win32::Foundation::TRUE;
+    use windows::Win32::System::Threading::GetCurrentThreadId;
+    use windows::Win32::UI::WindowsAndMessaging::{
+        EnumThreadWindows, GetClassNameW, SendMessageW, WM_CLOSE,
+    };
+    use windows::core::BOOL;
+
+    extern "system" fn collect(hwnd: HWND, lparam: LPARAM) -> BOOL {
+        // SAFETY: lparam is the Vec passed below, alive for the whole enumeration.
+        let found = unsafe { &mut *(lparam.0 as *mut Vec<HWND>) };
+        found.push(hwnd);
+        TRUE
+    }
+
+    let mut windows: Vec<HWND> = Vec::new();
+    // SAFETY: enumerates this thread's top-level windows into `windows`.
+    unsafe {
+        let _ = EnumThreadWindows(
+            GetCurrentThreadId(),
+            Some(collect),
+            LPARAM(&mut windows as *mut _ as isize),
+        );
+    }
+    // SAFETY: `class` is a valid null-terminated string.
+    let wanted = unsafe { class.as_wide() };
+    for hwnd in windows {
+        let mut name = [0u16; 64];
+        // SAFETY: reads the class name into a local buffer and sends to our own window.
+        unsafe {
+            let len = GetClassNameW(hwnd, &mut name) as usize;
+            if &name[..len] == wanted {
+                SendMessageW(hwnd, WM_CLOSE, None, None);
+            }
+        }
+    }
+}

@@ -23,7 +23,8 @@ pub struct Annotation {
 }
 
 impl Annotation {
-    /// Draws the annotation. `transform` may only translate (text is placed by offset).
+    /// Draws the annotation. `transform` may scale uniformly and translate (not rotate): the
+    /// editor draws at screen size, exports at image size.
     pub fn render(&self, pixmap: &mut PixmapMut<'_>, transform: Transform) {
         match &self.shape {
             Shape::Arrow(arrow) => arrow.render(pixmap, transform),

@@ -474,21 +474,31 @@ impl EditorState {
         }
     }
 
-    /// The screenshot with the committed annotations except `exclude`.
-    pub fn render_base(&self, exclude: Option<u32>) -> Bitmap {
-        render::flatten(
-            &self.image,
-            self.annotations.iter().filter(|a| Some(a.id) != exclude),
-        )
+    /// Draws the committed annotations except `exclude` onto `target`, which shows the image at
+    /// `zoom` times its size (the editor draws at screen size).
+    pub fn draw_committed(&self, target: &mut Bitmap, exclude: Option<u32>, zoom: f32) {
+        let annotations = self.annotations.iter().filter(|a| Some(a.id) != exclude);
+        render::draw_annotations_scaled(target, annotations, zoom);
     }
 
-    /// Draws what goes on top of [`Self::render_base`]: the annotation being moved or drawn and
-    /// the selection outline. The selection is editor-only and never exported.
-    pub fn render_overlay(&self, target: &mut Bitmap) {
+    /// The screenshot with the committed annotations except `exclude`, at full size.
+    pub fn render_base(&self, exclude: Option<u32>) -> Bitmap {
+        let mut base = self.image.clone();
+        self.draw_committed(&mut base, exclude, 1.0);
+        base
+    }
+
+    /// Draws what goes on top of [`Self::draw_committed`]: the annotation being moved or drawn
+    /// and the selection outline (editor-only, never exported). `zoom` as there.
+    pub fn render_overlay(&self, target: &mut Bitmap, zoom: f32) {
         let live = self
             .live_id()
             .and_then(|id| self.annotations.iter().find(|a| a.id == id));
-        render::draw_annotations(target, live.into_iter().chain(self.pending.as_ref()));
+        render::draw_annotations_scaled(
+            target,
+            live.into_iter().chain(self.pending.as_ref()),
+            zoom,
+        );
 
         let Some(selected) = self
             .selected
@@ -498,7 +508,7 @@ impl EditorState {
         };
         let (width, height) = (target.width(), target.height());
         if let Some(mut pixmap) = PixmapMut::from_bytes(target.pixels_mut(), width, height) {
-            self.draw_selection(&mut pixmap, selected);
+            self.draw_selection(&mut pixmap, selected, Transform::from_scale(zoom, zoom));
         }
     }
 
@@ -507,7 +517,12 @@ impl EditorState {
         self.pending.is_some() || self.selected.is_some()
     }
 
-    fn draw_selection(&self, pixmap: &mut PixmapMut<'_>, selected: &Annotation) {
+    fn draw_selection(
+        &self,
+        pixmap: &mut PixmapMut<'_>,
+        selected: &Annotation,
+        transform: Transform,
+    ) {
         let r = self.handle_radius();
         let bounds = selected.bounds().inflate(r, r);
         let mut paint = Paint::default();
@@ -527,7 +542,7 @@ impl EditorState {
                 dash: StrokeDash::new(vec![3.0 * width, 2.0 * width], 0.0),
                 ..Stroke::default()
             };
-            pixmap.stroke_path(&path, &paint, &stroke, Transform::identity(), None);
+            pixmap.stroke_path(&path, &paint, &stroke, transform, None);
         }
 
         // A single handle is just the centre of a number; only arrows get draggable end points.
@@ -543,14 +558,8 @@ impl EditorState {
         white.set_color(draw::color(255, 255, 255, 255));
         for h in handles {
             if let Some(circle) = PathBuilder::from_circle(h.x as f32, h.y as f32, r as f32) {
-                pixmap.fill_path(
-                    &circle,
-                    &white,
-                    FillRule::Winding,
-                    Transform::identity(),
-                    None,
-                );
-                pixmap.stroke_path(&circle, &paint, &ring, Transform::identity(), None);
+                pixmap.fill_path(&circle, &white, FillRule::Winding, transform, None);
+                pixmap.stroke_path(&circle, &paint, &ring, transform, None);
             }
         }
     }
@@ -863,7 +872,7 @@ mod tests {
         click(&mut e, (100.0, 50.0));
         assert_eq!(e.flatten(), flat, "selection chrome is never exported");
         let mut view = e.render_base(None);
-        e.render_overlay(&mut view);
+        e.render_overlay(&mut view, 1.0);
         assert_ne!(view, flat, "but the editor shows it");
     }
 

@@ -2,6 +2,8 @@
 
 Doel: een Rust-versie van [Snapr](https://github.com/rutgersmit/snapr) met **precies dezelfde functies en hetzelfde gedrag**. De twee versies draaien voorlopig **naast elkaar**, zodat je de verschillen kunt onderzoeken; daarna blijft er één over (zie §11). Daarom krijgt de Rust-versie een eigen mutex, een eigen instellingenmap en een eigen opstartregistratie, maar wel exact hetzelfde instellingenformaat, zodat overstappen later triviaal is.
 
+**Status: alle fases zijn af.** Wat nog moet gebeuren is testen op echte Windows-pc's (zie [TESTING.md](TESTING.md)) en de verschillen afwegen (zie [VERSCHILLEN.md](VERSCHILLEN.md)).
+
 Dit plan is gebaseerd op een volledige doorlezing van de huidige C#/WPF-code (`src/Snapr`, ±2000 regels).
 
 ---
@@ -62,45 +64,44 @@ De code is opgesplitst in een **platformonafhankelijke kern** (testbaar op Linux
 ```
 rusty-snapr/
 ├── Cargo.toml
-├── build.rs                  # icoon + manifest + versie-resource
-├── assets/                   # snapr.ico, snapr.svg, app.manifest (overgenomen), snapr.rc
+├── build.rs                  # icoon + manifest + versie-resource (versie uit SNAPR_VERSION)
+├── assets/                   # snapr.ico, snapr.svg, app.manifest, fonts/ (reserve voor de cijfers, OFL)
 ├── .github/workflows/        # build.yml, release.yml
+├── tests/golden.rs           # golden-image test van alle annotaties (+ tests/golden/scene.png)
+├── examples/timings.rs       # ruwe tijden van de zware stappen op 4K
+├── tools/wine-e2e.sh         # end-to-end test onder Wine (Linux)
 └── src/
-    ├── main.rs               # entry: single instance, App aanmaken, message loop
-    ├── app.rs                # App-state: settings, tray, capture-flow, foutafhandeling
+    ├── main.rs               # entry
+    ├── app.rs                # App: settings, tray, sneltoets, capture-flow, foutafhandeling
     │
     ├── core/                 # library-crate `snapr_core` (lib.rs hier), geen Win32: draait onder `cargo test` op Linux
-    │   ├── geometry.rs       # Point, Vec2, Rect, IRect (vervangt WPF Point/Vector/Rect/Int32Rect)
+    │   ├── geometry.rs       # Point, Vector, Rect, IRect
     │   ├── settings.rs       # AppSettings + laden/opslaan (JSON-compatibel)
-    │   ├── hotkey.rs         # HotkeyGesture: parse/to_string, VK ↔ naam
+    │   ├── hotkey.rs         # HotkeyGesture: parse/to_string, VK ↔ WPF-naam, opnameregels
     │   ├── strings.rs        # alle teksten, EN/NL
     │   ├── error_log.rs      # snapr.log met rotatie naar .old
+    │   ├── capture.rs        # overlay-logica: klik of sleep, labelposities, dimmen
+    │   ├── draw.rs           # tiny-skia-hulpjes voor BGRA-buffers
     │   └── editor/
-    │       ├── annotation.rs # enum Annotation { Arrow, Number, Pixelate } + id
-    │       ├── arrow.rs      # geometrie, hit-test, bounds, render
-    │       ├── number.rs
-    │       ├── pixelate.rs
-    │       ├── pixelator.rs  # bit-voor-bit port van Pixelator.cs
+    │       ├── annotation.rs # enum Shape { Arrow, Number, Pixelate } + id
+    │       ├── arrow.rs, number.rs, pixelate.rs, pixelator.rs
     │       ├── history.rs    # undo/redo
-    │       ├── state.rs      # EditorState: tool, kleur, selectie, sleep-state-machine
-    │       └── render.rs     # flatten(image, annotations) -> Pixmap; selectie-chrome
+    │       ├── state.rs      # EditorState: tool, kleur, selectie, sleep-state-machine, sneltoetsen
+    │       ├── render.rs     # samenvoegen (op elke schaal)
+    │       ├── chrome.rs     # layout + tekenen van toolbar/statusbalk/canvas, iconen uit de XAML
+    │       └── bitmap.rs, png.rs
     │
-    ├── platform/             # dunne, zo klein mogelijke unsafe-laag
-    │   ├── window.rs         # venster-registratie, wndproc met catch_unwind, DPI-helpers
-    │   ├── tray.rs           # NotifyIcon-equivalent incl. balloons en contextmenu
-    │   ├── hotkey.rs         # RegisterHotKey op een message-only venster
-    │   ├── capture.rs        # BitBlt van het virtuele scherm naar een DIB
-    │   ├── clipboard.rs      # CF_DIB + "PNG", met retry
-    │   ├── startup.rs        # HKCU\...\Run
-    │   ├── dialogs.rs        # opslaan-dialoog, map kiezen, MessageBox
-    │   └── locale.rs         # is de UI-taal Nederlands?
+    ├── platform/             # dunne laag rond Win32; alle unsafe zit hier
+    │   ├── window.rs         # vensterklassen, state per venster (Rc<dyn Any>), catch_unwind, painting
+    │   ├── gdi.rs            # DIB-sections, memory-DC's, fonts, tekst, schalen
+    │   ├── tray.rs, tooltip.rs, dialogs.rs, clipboard.rs, startup.rs
+    │   ├── screen.rs         # schermafbeelding, monitors, DPI
+    │   └── errors.rs, instance.rs, locale.rs, paths.rs
     │
     └── ui/
-        ├── overlay.rs        # CaptureOverlayWindow
-        ├── editor_window.rs  # EditorWindow: koppelt EditorState aan een venster
-        ├── settings_window.rs
-        ├── widgets.rs        # zelfgetekende knop, toggle, kleurbolletje, checkbox
-        └── icons.rs          # de SVG-paden uit EditorWindow.xaml
+        ├── overlay.rs        # selectie-overlay
+        ├── editor.rs         # editorvenster: koppelt EditorState aan een venster
+        └── settings.rs       # instellingenvenster
 ```
 
 ---
@@ -221,7 +222,7 @@ Na elke fase heb je iets dat werkt en dat je kunt uitproberen.
 | **3. Editor-basis** ✅ | Venster en schaling, renderpijplijn, toolbar/statusbalk, pijl, undo/redo, kopiëren, opslaan, kopiëren bij sluiten | Pijlen zetten en delen |
 | **4. Editor compleet** ✅ | Pixeleren, nummers, selecteren, verplaatsen, handles, Delete, cursors, alle sneltoetsen, tooltips | Functioneel gelijk aan Snapr-editor |
 | **5. Instellingen** ✅ | Instellingenvenster, sneltoets opnemen, map kiezen, starten met Windows | Volledige pariteit |
-| **6. Afwerking** | DPI-wisselingen, gemengde DPI, `TaskbarCreated`, foutdialoog, golden-image-tests, handmatige checklist, README (NL), release-workflow | Release 1.0 als vervanger van Snapr |
+| **6. Afwerking** ✅ | DPI-wisselingen, gemengde DPI, `TaskbarCreated`, foutdialoog, golden-image-tests, handmatige checklist, README (NL), release-workflow | Release 1.0 als vervanger van Snapr |
 
 Verwachte omvang: ongeveer 3000–4000 regels Rust. Het meeste extra werk ten opzichte van C# zit in de zelfgetekende widgets en de Win32-wrappers, die WPF/WinForms nu gratis leveren.
 

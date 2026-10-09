@@ -311,6 +311,8 @@ impl App {
     }
 
     fn exit(&self) {
+        // Like the C# version's Shutdown: close the editors first (they may copy their image).
+        editor::close_all();
         self.unregister_hotkey();
         self.tray.remove();
         // SAFETY: our own window; WM_DESTROY then ends the message loop.
