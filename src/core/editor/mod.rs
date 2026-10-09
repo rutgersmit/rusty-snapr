@@ -5,6 +5,8 @@ pub mod arrow;
 pub mod bitmap;
 pub mod chrome;
 pub mod history;
+pub mod number;
+pub mod pixelate;
 pub mod pixelator;
 pub mod png;
 pub mod render;

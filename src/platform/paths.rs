@@ -29,3 +29,10 @@ fn known_folder(id: &GUID) -> Option<PathBuf> {
         result
     }
 }
+
+/// The Windows fonts folder (C:\\Windows\\Fonts).
+pub fn fonts() -> PathBuf {
+    known_folder(&windows::Win32::UI::Shell::FOLDERID_Fonts)
+        .or_else(|| std::env::var_os("WINDIR").map(|w| PathBuf::from(w).join("Fonts")))
+        .unwrap_or_else(|| PathBuf::from(r"C:\Windows\Fonts"))
+}

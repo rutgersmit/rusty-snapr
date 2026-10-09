@@ -37,3 +37,14 @@ Wine is geen Windows. Dit moet je op een echte pc nalopen, het liefst naast de C
 - [ ] Sluiten (Esc, kruisje, Alt+F4) na een wijziging zet de bewerkte versie op het klembord; zonder wijziging blijft het klembord zoals het was.
 - [ ] Venster vergroten/verkleinen: de afbeelding schaalt mee omlaag, nooit omhoog; niet kleiner dan 580×260.
 - [ ] Editor naar een scherm met andere schaal slepen: toolbar en tekst schalen mee. (Afwijking: de C#-versie past dan ook de venstergrootte aan de inhoud aan; hier neemt het venster de door Windows voorgestelde grootte.)
+
+### Fase 4: pixeleren, nummers, selecteren
+
+- [ ] Pixeleren (`P` of `B`): tekst wordt onleesbaar; de blokken blijven stabiel tijdens het slepen; twee regio's krijgen elk een eigen ruispatroon.
+- [ ] Nummers (`N`): elke klik plaatst het volgende nummer; slepen verfijnt de plek; na ongedaan maken komt het nummer terug. 10 en hoger worden breder.
+- [ ] Nummers zien eruit als in de C#-versie (Segoe UI Bold, witte tekst, donkere tekst op geel).
+- [ ] Klik op een pijl of nummer selecteert (blauw gestippeld kader) en verplaatst hem, ook met een ander gereedschap actief. Pixelregio's zijn niet te selecteren.
+- [ ] Uiteinden van een geselecteerde pijl verslepen (handje als cursor); verplaatsen kan niet buiten de afbeelding.
+- [ ] `Delete`/`Backspace` verwijdert de selectie; `Esc` deselecteert eerst en sluit pas daarna.
+- [ ] Het selectiekader komt niet mee bij kopiëren of opslaan.
+- [ ] Tooltips op alle toolbarknoppen, in de taal van Windows.

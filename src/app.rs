@@ -26,7 +26,7 @@ use windows::core::{PCWSTR, Result, w};
 use crate::platform::errors;
 use crate::platform::instance::SingleInstance;
 use crate::platform::tray::{self, BalloonIcon, TrayIcon};
-use crate::platform::{clipboard, locale, paths, wide, window};
+use crate::platform::{clipboard, locale, paths, tooltip, wide, window};
 use crate::ui::{editor, overlay};
 
 /// Different from the C# version's mutex, so both can run side by side.
@@ -63,6 +63,11 @@ pub fn run() -> i32 {
     let data_dir = paths::app_data().join(DATA_FOLDER_NAME);
     errors::init(ErrorLog::new(data_dir.join("snapr.log")));
     strings::init(locale::ui_language());
+    tooltip::init_common_controls();
+    // The numbered markers use Segoe UI Bold like the C# version; a built-in font otherwise.
+    if let Ok(font) = std::fs::read(paths::fonts().join("segoeuib.ttf")) {
+        snapr_core::editor::number::set_font(font);
+    }
 
     let Some(_instance) = SingleInstance::acquire(SINGLE_INSTANCE_MUTEX) else {
         return 0;

@@ -6,8 +6,8 @@ use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use snapr_core::editor::chrome::{self, Button, Layout, ToolbarState};
-use snapr_core::editor::state::{Changes, Command, EditorState, command_for_key};
-use snapr_core::editor::{Bitmap, Rgb, Tool, png, render};
+use snapr_core::editor::state::{Changes, Command, Cursor, EditorState, command_for_key};
+use snapr_core::editor::{Bitmap, Rgb, Tool, png};
 use snapr_core::geometry::IRect;
 use snapr_core::{APP_NAME, strings};
 use tiny_skia::PixmapMut;
@@ -16,14 +16,16 @@ use windows::Win32::Graphics::Gdi::HDC;
 use windows::Win32::UI::Controls::WM_MOUSELEAVE;
 use windows::Win32::UI::Input::KeyboardAndMouse::{VK_CONTROL, VK_SHIFT};
 use windows::Win32::UI::WindowsAndMessaging::{
-    HTCLIENT, IDC_ARROW, IDC_CROSS, IDC_HAND, MINMAXINFO, WINDOW_EX_STYLE, WM_CAPTURECHANGED,
-    WM_CLOSE, WM_DPICHANGED, WM_ERASEBKGND, WM_GETMINMAXINFO, WM_KEYDOWN, WM_LBUTTONDOWN,
-    WM_LBUTTONUP, WM_MOUSEMOVE, WM_NCDESTROY, WM_PAINT, WM_SETCURSOR, WM_SIZE, WS_OVERLAPPEDWINDOW,
+    HTCLIENT, IDC_ARROW, IDC_CROSS, IDC_HAND, IDC_SIZEALL, MINMAXINFO, WINDOW_EX_STYLE,
+    WM_CAPTURECHANGED, WM_CLOSE, WM_DPICHANGED, WM_ERASEBKGND, WM_GETMINMAXINFO, WM_KEYDOWN,
+    WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_NCDESTROY, WM_PAINT, WM_SETCURSOR, WM_SIZE,
+    WS_OVERLAPPEDWINDOW,
 };
 use windows::core::{PCWSTR, Result, w};
 
 use crate::app;
 use crate::platform::gdi::{self, Align, Dib, Font, MemDc};
+use crate::platform::tooltip::Tooltips;
 use crate::platform::{clipboard, dialogs, screen, window};
 
 const CLASS: PCWSTR = w!("RustySnaprEditor");
@@ -67,6 +69,7 @@ pub fn open(image: Bitmap) -> Result<()> {
             composite: None,
             fonts: Fonts::new(scale),
         }),
+        tooltips: RefCell::new(None),
     });
     let hwnd = window::create_window(
         CLASS,
@@ -78,6 +81,7 @@ pub fn open(image: Bitmap) -> Result<()> {
     )?;
     editor.hwnd.set(hwnd);
     window::use_dark_title_bar(hwnd);
+    editor.add_tooltips();
     editor.relayout();
     window::show(hwnd);
     Ok(())
@@ -101,6 +105,7 @@ struct Editor {
     hwnd: Cell<HWND>,
     state: RefCell<EditorState>,
     view: RefCell<View>,
+    tooltips: RefCell<Option<Tooltips>>,
 }
 
 struct View {
@@ -110,10 +115,13 @@ struct View {
     pressed: Option<Button>,
     tracking_leave: bool,
     status: String,
-    /// The image with committed annotations, and the state revision it belongs to.
-    composite: Option<(u64, Bitmap)>,
+    /// The image with committed annotations (minus the one being moved), and the state revision
+    /// and left-out annotation it belongs to.
+    composite: Option<(CompositeKey, Bitmap)>,
     fonts: Fonts,
 }
+
+type CompositeKey = (u64, Option<u32>);
 
 struct Fonts {
     text: Font,
@@ -233,6 +241,7 @@ impl Editor {
             (state.image().width(), state.image().height())
         };
         self.view.borrow_mut().layout = chrome::layout(client, size, scale);
+        self.move_tooltips();
         window::invalidate_all(self.hwnd());
     }
 
@@ -286,16 +295,15 @@ impl Editor {
             chrome::draw(&mut pixmap, layout, &toolbar);
         }
 
-        // The image, with the annotation being drawn on top.
+        // The image, with the annotation being drawn or moved and the selection on top.
         if let Some((_, composite)) = &view.composite {
             let target = layout.image_pixels();
-            match state.pending() {
-                Some(pending) => {
-                    let mut frame = composite.clone();
-                    render::draw_annotations(&mut frame, [pending]);
-                    gdi::draw_bitmap(back_dc.hdc(), target, &frame);
-                }
-                None => gdi::draw_bitmap(back_dc.hdc(), target, composite),
+            if state.has_overlay() {
+                let mut frame = composite.clone();
+                state.render_overlay(&mut frame);
+                gdi::draw_bitmap(back_dc.hdc(), target, &frame);
+            } else {
+                gdi::draw_bitmap(back_dc.hdc(), target, composite);
             }
         }
 
@@ -326,18 +334,13 @@ impl Editor {
             Align::Right,
         );
         if let Some(rect) = layout.button_rect(Button::Tool(Tool::Number)) {
-            let on_accent = toolbar.tool == Tool::Number;
-            let color = if toolbar.is_enabled(Button::Tool(Tool::Number)) || on_accent {
-                rgb(chrome::FOREGROUND)
-            } else {
-                dimmed(chrome::FOREGROUND, chrome::TOOLBAR_BACKGROUND)
-            };
+            let font = &view.fonts.number_icon;
             gdi::draw_text(
                 back_dc.hdc(),
-                &view.fonts.number_icon,
+                font,
                 "1",
                 rect,
-                color,
+                rgb(chrome::FOREGROUND),
                 Align::Center,
             );
         }
@@ -345,13 +348,39 @@ impl Editor {
         gdi::blit(hdc, 0, 0, width, height, back_dc.hdc(), 0, 0);
     }
 
-    /// Rebuilds the cached image-with-annotations when the annotations changed.
+    /// Rebuilds the cached image-with-annotations when the annotations changed, or when a
+    /// different annotation is being moved (that one is drawn on top every frame instead).
     fn update_composite(&self) {
         let state = self.state.borrow();
         let mut view = self.view.borrow_mut();
-        let current = view.composite.as_ref().map(|(revision, _)| *revision);
-        if current != Some(state.revision()) {
-            view.composite = Some((state.revision(), state.flatten()));
+        let key = (state.revision(), state.live_id());
+        let current = view.composite.as_ref().map(|(k, _)| *k);
+        if current != Some(key) {
+            view.composite = Some((key, state.render_base(key.1)));
+        }
+    }
+
+    // ---- Tooltips ------------------------------------------------------------------------
+
+    fn add_tooltips(&self) {
+        let Ok(tooltips) = Tooltips::new(self.hwnd()) else {
+            return;
+        };
+        let view = self.view.borrow();
+        for (id, (button, rect)) in view.layout.buttons.iter().enumerate() {
+            tooltips.add(id, *rect, tooltip_text(*button));
+        }
+        drop(view);
+        *self.tooltips.borrow_mut() = Some(tooltips);
+    }
+
+    fn move_tooltips(&self) {
+        let tooltips = self.tooltips.borrow();
+        let Some(tooltips) = tooltips.as_ref() else {
+            return;
+        };
+        for (id, (_, rect)) in self.view.borrow().layout.buttons.iter().enumerate() {
+            tooltips.move_to(id, *rect);
         }
     }
 
@@ -394,7 +423,8 @@ impl Editor {
             }
         } else if on_image {
             let changes = self.state.borrow_mut().mouse_down(point);
-            if changes != Changes::NONE {
+            // Grabbing an end point starts a drag without changing anything yet.
+            if self.state.borrow().is_dragging() {
                 window::capture_mouse(self.hwnd());
             }
             self.apply(changes);
@@ -418,10 +448,17 @@ impl Editor {
     fn update_cursor(&self) {
         let p = window::cursor_in_client(self.hwnd());
         let view = self.view.borrow();
+        let state = self.state.borrow();
         let cursor = match view.layout.button_at(p) {
             Some(button) if self.toolbar_state().is_enabled(button) => IDC_HAND,
             Some(_) => IDC_ARROW,
-            None if view.layout.image_contains(p) || self.state.borrow().is_dragging() => IDC_CROSS,
+            None if state.is_dragging() => IDC_CROSS,
+            None if view.layout.image_contains(p) => match state.cursor_at(view.layout.to_image(p))
+            {
+                Cursor::Hand => IDC_HAND,
+                Cursor::Move => IDC_SIZEALL,
+                Cursor::Cross => IDC_CROSS,
+            },
             None => IDC_ARROW,
         };
         window::set_cursor(cursor);
@@ -454,13 +491,20 @@ impl Editor {
 
     fn run(&self, command: Command) {
         match command {
-            Command::Close => window::request_close(self.hwnd()),
+            Command::Escape => {
+                let deselected = self.state.borrow_mut().escape();
+                match deselected {
+                    Some(changes) => self.apply(changes),
+                    None => window::request_close(self.hwnd()),
+                }
+            }
             Command::Copy => self.copy(),
             Command::Save => self.save(),
             other => {
                 let changes = {
                     let mut state = self.state.borrow_mut();
                     match other {
+                        Command::Delete => state.delete_selected(),
                         Command::Undo => state.undo(),
                         Command::Redo => state.redo(),
                         Command::Tool(tool) => state.select_tool(tool),
@@ -533,14 +577,16 @@ fn rgb(color: Rgb) -> (u8, u8, u8) {
     (color.0, color.1, color.2)
 }
 
-/// A colour at the disabled opacity over a background.
-fn dimmed(color: Rgb, background: Rgb) -> (u8, u8, u8) {
-    let mix = |c: u8, b: u8| {
-        (c as f32 * chrome::DISABLED_OPACITY + b as f32 * (1.0 - chrome::DISABLED_OPACITY)) as u8
-    };
-    (
-        mix(color.0, background.0),
-        mix(color.1, background.1),
-        mix(color.2, background.2),
-    )
+fn tooltip_text(button: Button) -> &'static str {
+    let s = strings::get();
+    match button {
+        Button::Tool(Tool::Arrow) => s.tool_arrow(),
+        Button::Tool(Tool::Pixelate) => s.tool_pixelate(),
+        Button::Tool(Tool::Number) => s.tool_number(),
+        Button::Color(index) => s.colors()[index],
+        Button::Undo => s.undo(),
+        Button::Redo => s.redo(),
+        Button::Copy => s.copy(),
+        Button::Save => s.save(),
+    }
 }

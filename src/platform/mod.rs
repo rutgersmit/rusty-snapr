@@ -8,6 +8,7 @@ pub mod instance;
 pub mod locale;
 pub mod paths;
 pub mod screen;
+pub mod tooltip;
 pub mod tray;
 pub mod window;
 

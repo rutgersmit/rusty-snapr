@@ -22,6 +22,7 @@ check() { # description, command...
 clipboard() { xclip -selection clipboard -t image/png -o > "$1" 2>/dev/null; }
 size_is() { [ "$(identify -format '%wx%h' "$1" 2>/dev/null)" = "$2" ]; }
 same_pixels() { [ "$(compare -metric AE "$1" "$2" null: 2>&1)" = "0" ]; }
+different_pixels() { ! same_pixels "$1" "$2"; }
 
 convert -size 1280x800 gradient:'#3a7bd5-#f2994a' -gravity center -pointsize 60 -fill white \
     -annotate 0 'Snapr test 1234' "$WORK/bg.png"
@@ -59,6 +60,20 @@ close_editor
 clipboard "$WORK/edited.png"
 pixel() { convert "$1" -crop 1x1+$2+$3 -format '%[pixel:p]' info:; }
 check "closing copies the image with the arrow" [ "$(pixel "$WORK/edited.png" 145 91)" = "srgb(255,59,48)" ]
+
+# A number marker and a pixelated region (image origin is at screen 440,324).
+xdotool mousemove $TRAY click 1; sleep 3
+xdotool mousemove 300 250 mousedown 1 mousemove 500 300 mousemove 700 450; sleep 1; xdotool mouseup 1; sleep 4
+xdotool key n; sleep 0.3; xdotool mousemove 470 350 click 1; sleep 0.5
+xdotool key p; sleep 0.3
+xdotool mousemove 560 445 mousedown 1 mousemove 620 480 mousemove 700 505; sleep 0.5; xdotool mouseup 1; sleep 1
+close_editor
+clipboard "$WORK/marked.png"
+check "closing copies the number marker" [ "$(pixel "$WORK/marked.png" 22 20)" = "srgb(255,59,48)" ]
+check "pixelated blocks are uniform" [ "$(pixel "$WORK/marked.png" 127 127)" = "$(pixel "$WORK/marked.png" 133 133)" ]
+check "pixelating changed the image" different_pixels \
+    <(convert "$WORK/marked.png" -crop 140x60+120+121 +repage png:-) \
+    <(convert "$WORK/expected.png" -crop 140x60+120+121 +repage png:-)
 
 # Saving with the dialog's defaults writes a PNG to Pictures\Screenshots.
 xdotool mousemove $TRAY click 1; sleep 3

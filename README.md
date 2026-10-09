@@ -12,10 +12,10 @@ Het plan staat in [PLAN.md](PLAN.md).
 | 1 | Kern: instellingen, sneltoetsen, teksten (EN/NL), foutlog, pixelator (gelijk aan de C#-versie) | klaar |
 | 2 | Sneltoets, schermafbeelding, selectie-overlay, klembord | klaar |
 | 3 | Editor: pijlen in vijf kleuren, ongedaan maken/opnieuw, kopiëren, opslaan als PNG | klaar |
-| 4 | Pixeleren, nummers, selecteren en verplaatsen | gepland |
+| 4 | Pixeleren, nummers, selecteren en verplaatsen, tooltips | klaar |
 | 5–6 | Instellingenvenster, afwerking | gepland |
 
-Je kunt nu een screenshot maken (sneltoets of klik op het tray-icoon), een gebied kiezen en er pijlen op zetten. Pixeleren en nummers staan al in de toolbar, maar zijn tot fase 4 uitgeschakeld.
+De editor is functioneel gelijk aan die van de C#-versie: pijlen, pixeleren en nummers, selecteren, verplaatsen, uiteinden verslepen, verwijderen, ongedaan maken, kopiëren en opslaan.
 
 ## Naast de C#-versie
 
@@ -47,6 +47,10 @@ rustup target add x86_64-pc-windows-gnu
 sudo apt install mingw-w64
 cargo build --release --target x86_64-pc-windows-gnu
 ```
+
+## Lettertype
+
+De nummers gebruiken Segoe UI Bold, net als de C#-versie. Is dat lettertype er niet, dan valt Snapr terug op de cijfers van Carlito Bold (SIL Open Font License, zie `assets/fonts/`).
 
 ## Testen
 

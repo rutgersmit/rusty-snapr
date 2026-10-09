@@ -261,7 +261,6 @@ impl ToolbarState {
         match button {
             Button::Undo => self.can_undo,
             Button::Redo => self.can_redo,
-            Button::Tool(tool) => super::state::EditorState::tool_available(tool),
             _ => true,
         }
     }
