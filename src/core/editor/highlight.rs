@@ -16,6 +16,9 @@ use crate::geometry::{Point, Rect, Vector};
 const OPACITY: u8 = 150;
 /// Strokes within this angle of horizontal or vertical are snapped to it.
 const SNAP_DEGREES: f64 = 7.0;
+/// At most this many samples are kept while drawing, so each mouse move costs the same however
+/// long the drag goes on: past it, every other sample is dropped and the spacing doubles.
+const MAX_SAMPLES: usize = 512;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Highlight {
@@ -24,8 +27,49 @@ pub struct Highlight {
     pub color: Rgb,
     /// Height of the band in image pixels.
     pub thickness: f64,
-    /// The mouse positions of the creating drag; empty once the stroke is finished.
-    raw: Vec<Point>,
+    /// The creating drag; `None` once the stroke is finished.
+    drawing: Option<Drawing>,
+}
+
+/// The mouse path of the creating drag, resampled as it comes in.
+#[derive(Debug, Clone, PartialEq)]
+struct Drawing {
+    /// Points along the path, `step` apart.
+    samples: Vec<Point>,
+    step: f64,
+    /// The latest mouse position (not yet a whole step past the last sample).
+    tip: Point,
+}
+
+impl Drawing {
+    fn add(&mut self, p: Point) {
+        let mut last = self.samples[self.samples.len() - 1];
+        let mut v = p - last;
+        while v.length() >= self.step {
+            last = last + v.unit() * self.step;
+            self.samples.push(last);
+            v = p - last;
+        }
+        self.tip = p;
+
+        if self.samples.len() > MAX_SAMPLES {
+            let mut index = 0;
+            self.samples.retain(|_| {
+                index += 1;
+                index % 2 == 1
+            });
+            self.step *= 2.0;
+        }
+    }
+
+    /// The samples and the tip: the whole path so far.
+    fn path(&self) -> Vec<Point> {
+        let mut path = self.samples.clone();
+        if path[path.len() - 1] != self.tip {
+            path.push(self.tip);
+        }
+        path
+    }
 }
 
 impl Highlight {
@@ -35,22 +79,29 @@ impl Highlight {
             points: vec![start],
             color,
             thickness,
-            raw: vec![start],
+            drawing: Some(Drawing {
+                samples: vec![start],
+                step: (thickness / 4.0).max(1.0),
+                tip: start,
+            }),
         }
     }
 
     /// Adds a mouse position to the stroke being drawn and reshapes it.
     pub fn extend(&mut self, p: Point) {
-        if self.raw.last() == Some(&p) {
+        let Some(drawing) = self.drawing.as_mut() else {
+            return;
+        };
+        if drawing.tip == p {
             return;
         }
-        self.raw.push(p);
-        self.points = shape(&self.raw, self.thickness);
+        drawing.add(p);
+        self.points = shape(&drawing.path(), self.thickness, drawing.step);
     }
 
     /// Ends the creating drag; the shape is fixed from now on.
     pub fn finish(&mut self) {
-        self.raw = Vec::new();
+        self.drawing = None;
     }
 
     fn length(&self) -> f64 {
@@ -122,11 +173,10 @@ impl Highlight {
     }
 }
 
-/// The band's centre line for a stroke drawn through `raw`.
-fn shape(raw: &[Point], thickness: f64) -> Vec<Point> {
-    let points = resample(raw, (thickness / 4.0).max(1.0));
+/// The band's centre line for a stroke drawn through `points`, which lie about `step` apart.
+fn shape(points: &[Point], thickness: f64, step: f64) -> Vec<Point> {
     if points.len() < 2 {
-        return points;
+        return points.to_vec();
     }
 
     let n = points.len() as f64;
@@ -134,7 +184,7 @@ fn shape(raw: &[Point], thickness: f64) -> Vec<Point> {
         points.iter().map(|p| p.x).sum::<f64>() / n,
         points.iter().map(|p| p.y).sum::<f64>() / n,
     );
-    let direction = fitted_direction(&points, center);
+    let direction = fitted_direction(points, center);
 
     // How far the stroke strays from that line. A long stroke may sag a little more: the arm
     // pivots at the elbow, so long "straight" lines come out as slight arcs.
@@ -151,10 +201,7 @@ fn shape(raw: &[Point], thickness: f64) -> Vec<Point> {
         return vec![center + direction * from, center + direction * to];
     }
 
-    smooth(
-        &points,
-        ((thickness * 1.5) / (thickness / 4.0).max(1.0)).round() as usize,
-    )
+    smooth(points, ((thickness * 1.5) / step).round() as usize)
 }
 
 /// The direction of the line that best fits the points (least squares, perpendicular distance),
@@ -183,25 +230,6 @@ fn fitted_direction(points: &[Point], center: Point) -> Vector {
     } else {
         direction
     }
-}
-
-/// Points along the polyline `raw`, about `step` apart, keeping both ends.
-fn resample(raw: &[Point], step: f64) -> Vec<Point> {
-    let mut out = vec![raw[0]];
-    let mut last = raw[0];
-    for &p in &raw[1..] {
-        let mut v = p - last;
-        while v.length() >= step {
-            last = last + v.unit() * step;
-            out.push(last);
-            v = p - last;
-        }
-    }
-    let end = raw[raw.len() - 1];
-    if (end - out[out.len() - 1]).length() > 0.0 {
-        out.push(end);
-    }
-    out
 }
 
 /// A moving average over up to `radius` neighbours on each side; the window narrows towards the
@@ -331,6 +359,25 @@ mod tests {
             assert!((r - 150.0).abs() < 2.0, "r = {r}");
         }
         assert!(!h.has_end_handles());
+    }
+
+    #[test]
+    fn a_long_drag_keeps_a_bounded_number_of_samples() {
+        // Back and forth along a line of text for a long time.
+        let points: Vec<(f64, f64)> = (0..20_000)
+            .map(|i| {
+                let x = (i % 400) as f64;
+                let x = if (i / 400) % 2 == 0 { x } else { 400.0 - x };
+                (20.0 + x, 50.0 + [0.0, 2.0, -2.0][i % 3])
+            })
+            .collect();
+        let mut h = Highlight::new(Point::new(points[0].0, points[0].1), YELLOW, 18.0);
+        for &(x, y) in &points[1..] {
+            h.extend(Point::new(x, y));
+            assert!(h.drawing.as_ref().unwrap().samples.len() <= MAX_SAMPLES);
+        }
+        assert_eq!(h.points.len(), 2, "still one straight band");
+        assert_eq!(h.points[0].y, h.points[1].y);
     }
 
     #[test]
