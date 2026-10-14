@@ -126,6 +126,10 @@ impl Strings {
         self.t("Arrow (A)", "Pijl (A)")
     }
 
+    pub fn tool_highlight(&self) -> &'static str {
+        self.t("Highlight (H)", "Markeren (H)")
+    }
+
     pub fn tool_pixelate(&self) -> &'static str {
         self.t("Pixelate (P)", "Pixeleren (P)")
     }
@@ -163,8 +167,8 @@ impl Strings {
 
     pub fn editor_hint(&self) -> &'static str {
         self.t(
-            "A arrow  ·  P pixelate  ·  N numbers  ·  Del delete  ·  Ctrl+C copy  ·  Ctrl+S save  ·  Esc close",
-            "A pijl  ·  P pixeleren  ·  N nummers  ·  Del verwijderen  ·  Ctrl+C kopiëren  ·  Ctrl+S opslaan  ·  Esc sluiten",
+            "A arrow  ·  H highlight  ·  P pixelate  ·  N numbers  ·  Del delete  ·  Ctrl+C copy  ·  Ctrl+S save  ·  Esc close",
+            "A pijl  ·  H markeren  ·  P pixeleren  ·  N nummers  ·  Del verwijderen  ·  Ctrl+C kopiëren  ·  Ctrl+S opslaan  ·  Esc sluiten",
         )
     }
 

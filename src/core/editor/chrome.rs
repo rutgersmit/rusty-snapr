@@ -116,7 +116,7 @@ pub fn layout(client: (i32, i32), image: (u32, u32), scale: f64) -> Layout {
         *x += 1.0 + SEPARATOR_MARGIN;
     };
 
-    for tool in [Tool::Arrow, Tool::Pixelate, Tool::Number] {
+    for tool in [Tool::Arrow, Tool::Highlight, Tool::Pixelate, Tool::Number] {
         button(&mut x, Button::Tool(tool), &mut buttons);
     }
     separator(&mut x, &mut separators);
@@ -421,6 +421,21 @@ fn icon_path(button: Button) -> (Option<Path>, bool) {
             polyline(&mut pb, &[(10.0, 5.0), (19.0, 5.0), (19.0, 14.0)]);
             false
         }
+        // A highlighter pen tilted to the left, its chisel tip on a line.
+        // M14,3 L20,9 L11,18 L5,12 Z M5,12 L3,17 L6,18 L11,18 M3,21 H21
+        Button::Tool(Tool::Highlight) => {
+            polyline(
+                &mut pb,
+                &[(14.0, 3.0), (20.0, 9.0), (11.0, 18.0), (5.0, 12.0)],
+            );
+            pb.close();
+            polyline(
+                &mut pb,
+                &[(5.0, 12.0), (3.0, 17.0), (6.0, 18.0), (11.0, 18.0)],
+            );
+            polyline(&mut pb, &[(3.0, 21.0), (21.0, 21.0)]);
+            false
+        }
         // Five filled squares in a checkerboard.
         Button::Tool(Tool::Pixelate) => {
             for (x, y) in [
@@ -619,13 +634,13 @@ mod tests {
         );
         assert_eq!(
             l.button_rect(Button::Tool(Tool::Number)),
-            Some(IRect::new(88, 7, 34, 34))
+            Some(IRect::new(126, 7, 34, 34))
         );
-        // Separator: 124 + 8.
-        assert_eq!(l.separators[0], IRect::new(132, 14, 1, 20));
+        // Separator: 162 + 8.
+        assert_eq!(l.separators[0], IRect::new(170, 14, 1, 20));
         assert_eq!(
             l.button_rect(Button::Color(0)),
-            Some(IRect::new(143, 12, 24, 24))
+            Some(IRect::new(181, 12, 24, 24))
         );
         assert_eq!(
             l.button_rect(Button::Save),

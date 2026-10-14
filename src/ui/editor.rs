@@ -610,6 +610,7 @@ fn tooltip_text(button: Button) -> &'static str {
     let s = strings::get();
     match button {
         Button::Tool(Tool::Arrow) => s.tool_arrow(),
+        Button::Tool(Tool::Highlight) => s.tool_highlight(),
         Button::Tool(Tool::Pixelate) => s.tool_pixelate(),
         Button::Tool(Tool::Number) => s.tool_number(),
         Button::Color(index) => s.colors()[index],

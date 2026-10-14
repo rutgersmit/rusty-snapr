@@ -7,6 +7,7 @@ use tiny_skia::{FillRule, Paint, PathBuilder, PixmapMut, Stroke, StrokeDash, Tra
 use super::annotation::{Annotation, Shape};
 use super::arrow::Arrow;
 use super::chrome::ACCENT;
+use super::highlight::Highlight;
 use super::history::History;
 use super::number::Number;
 use super::pixelate::Pixelate;
@@ -73,6 +74,7 @@ pub fn command_for_key(key: u16, ctrl: bool, shift: bool) -> Option<Command> {
     const KEY_A: u16 = b'A' as u16;
     const KEY_B: u16 = b'B' as u16;
     const KEY_C: u16 = b'C' as u16;
+    const KEY_H: u16 = b'H' as u16;
     const KEY_N: u16 = b'N' as u16;
     const KEY_P: u16 = b'P' as u16;
     const KEY_S: u16 = b'S' as u16;
@@ -89,6 +91,7 @@ pub fn command_for_key(key: u16, ctrl: bool, shift: bool) -> Option<Command> {
         KEY_C if ctrl => Command::Copy,
         KEY_S if ctrl => Command::Save,
         KEY_A if !ctrl => Command::Tool(Tool::Arrow),
+        KEY_H if !ctrl => Command::Tool(Tool::Highlight),
         KEY_P | KEY_B if !ctrl => Command::Tool(Tool::Pixelate),
         KEY_N if !ctrl => Command::Tool(Tool::Number),
         KEY_1..=KEY_5 if !ctrl => Command::Color((key - KEY_1) as usize),
@@ -101,9 +104,9 @@ pub fn command_for_key(key: u16, ctrl: bool, shift: bool) -> Option<Command> {
 pub enum Cursor {
     /// Drawing.
     Cross,
-    /// Over an arrow or number: it can be moved.
+    /// Over an arrow, highlight or number: it can be moved.
     Move,
-    /// Over an end point of the selected arrow.
+    /// Over an end point of the selected arrow or straight highlight.
     Hand,
 }
 
@@ -121,7 +124,10 @@ pub struct EditorState {
     history: History,
     next_id: u32,
     tool: Tool,
+    /// Colour of arrows and numbers.
     color: usize,
+    /// The highlighter keeps its own colour, yellow at first.
+    highlight_color: usize,
     /// Display scale (1.0 = 96 DPI); sizes annotations and handles like the C# version.
     scale: f64,
     /// The annotation being drawn by the current drag.
@@ -142,6 +148,7 @@ impl EditorState {
             next_id: 1,
             tool: Tool::Arrow,
             color: 0,
+            highlight_color: 2,
             scale,
             pending: None,
             drag: Drag::None,
@@ -171,8 +178,13 @@ impl EditorState {
         self.tool
     }
 
+    /// The colour the current tool draws with (pixelate shows the arrow's).
     pub fn color_index(&self) -> usize {
-        self.color
+        if self.tool == Tool::Highlight {
+            self.highlight_color
+        } else {
+            self.color
+        }
     }
 
     pub fn can_undo(&self) -> bool {
@@ -214,6 +226,11 @@ impl EditorState {
         5.0 * self.scale
     }
 
+    /// About the height of a line of text, scaled with display DPI.
+    fn highlight_thickness(&self) -> f64 {
+        round_like_dotnet(18.0 * self.scale)
+    }
+
     /// Blocks large enough that text inside cannot be read, scaled with display DPI.
     fn pixel_block_size(&self) -> i32 {
         round_like_dotnet(9.0 * self.scale).max(8.0) as i32
@@ -243,7 +260,7 @@ impl EditorState {
             return Changes::NONE;
         }
 
-        // Clicking an existing arrow or number selects it and starts moving it, whatever the tool.
+        // Clicking an existing arrow, highlight or number selects it and starts moving it, whatever the tool.
         if let Some(id) = self.annotation_at(p) {
             self.selected = Some(id);
             let original = self.handles_of(id);
@@ -252,9 +269,12 @@ impl EditorState {
         }
 
         self.selected = None;
-        let color = PALETTE[self.color];
+        let color = PALETTE[self.color_index()];
         let shape = match self.tool {
             Tool::Arrow => Shape::Arrow(Arrow::new(p, color, round_like_dotnet(7.0 * self.scale))),
+            Tool::Highlight => {
+                Shape::Highlight(Highlight::new(p, color, self.highlight_thickness()))
+            }
             Tool::Number => Shape::Number(Number::new(
                 p,
                 self.next_number(),
@@ -296,6 +316,7 @@ impl EditorState {
                 let image = &self.image;
                 match self.pending.as_mut().map(|a| &mut a.shape) {
                     Some(Shape::Arrow(arrow)) => arrow.end = p,
+                    Some(Shape::Highlight(highlight)) => highlight.extend(p),
                     Some(Shape::Pixelate(pixelate)) => pixelate.update(p, image),
                     // Drag to fine-tune the position.
                     Some(Shape::Number(number)) => number.center = p,
@@ -321,9 +342,12 @@ impl EditorState {
                 Changes::ALL
             }
             Drag::Create => {
-                if let Some(finished) = self.pending.take()
+                if let Some(mut finished) = self.pending.take()
                     && !finished.is_empty()
                 {
+                    if let Shape::Highlight(highlight) = &mut finished.shape {
+                        highlight.finish();
+                    }
                     self.history.add(&mut self.annotations, finished);
                     self.committed();
                 }
@@ -346,7 +370,7 @@ impl EditorState {
 
     // ---- Selection -----------------------------------------------------------------------
 
-    /// The topmost arrow or number under `p`.
+    /// The topmost arrow, highlight or number under `p`.
     fn annotation_at(&self, p: Point) -> Option<u32> {
         let tolerance = self.hit_tolerance();
         self.annotations
@@ -356,12 +380,13 @@ impl EditorState {
             .map(|a| a.id)
     }
 
-    /// Index of the arrow end point under `p`, if any (a number's single handle doesn't count).
+    /// Index of the end point under `p`, if any (only arrows and straight highlights have them).
     fn handle_at(&self, id: u32, p: Point) -> Option<usize> {
-        let handles = self.handles_of(id);
-        if handles.len() < 2 {
+        let annotation = self.annotations.iter().find(|a| a.id == id)?;
+        if !annotation.has_end_handles() {
             return None;
         }
+        let handles = annotation.handles().unwrap_or_default();
         let reach = self.handle_radius() + self.hit_tolerance();
         handles.iter().position(|&h| (h - p).length() <= reach)
     }
@@ -447,6 +472,10 @@ impl EditorState {
     pub fn select_color(&mut self, index: usize) -> Changes {
         if index >= PALETTE.len() {
             return Changes::NONE;
+        }
+        if self.tool == Tool::Highlight {
+            self.highlight_color = index;
+            return Changes::TOOLBAR;
         }
         self.color = index;
         // Pixelate has no colour, so picking one switches back to the arrow.
@@ -545,11 +574,11 @@ impl EditorState {
             pixmap.stroke_path(&path, &paint, &stroke, transform, None);
         }
 
-        // A single handle is just the centre of a number; only arrows get draggable end points.
-        let handles = selected.handles().unwrap_or_default();
-        if handles.len() < 2 {
+        // Only arrows and straight highlights get draggable end points.
+        if !selected.has_end_handles() {
             return;
         }
+        let handles = selected.handles().unwrap_or_default();
         let ring = Stroke {
             width: (r * 0.45) as f32,
             ..Stroke::default()
@@ -891,6 +920,62 @@ mod tests {
         );
     }
 
+    fn highlight(editor: &EditorState, index: usize) -> &Highlight {
+        match &editor.annotations()[index].shape {
+            Shape::Highlight(highlight) => highlight,
+            other => panic!("not a highlight: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn highlighting_a_line_of_text_gives_a_straight_band() {
+        let mut e = editor();
+        e.select_tool(Tool::Highlight);
+        e.mouse_down(Point::new(20.0, 50.0));
+        for (i, x) in (25..=180).step_by(5).enumerate() {
+            let wobble = [2.0, -3.0, 1.0, 3.0, -2.0][i % 5];
+            e.mouse_move(Point::new(x as f64, 50.0 + wobble));
+        }
+        e.finish_drag();
+        let h = highlight(&e, 0);
+        assert_eq!(h.points.len(), 2);
+        assert_eq!(h.points[0].y, h.points[1].y);
+        assert_eq!(h.color, PALETTE[2], "yellow by default");
+        assert_eq!(h.thickness, 18.0);
+    }
+
+    #[test]
+    fn the_highlighter_keeps_its_own_colour() {
+        let mut e = editor();
+        e.select_tool(Tool::Highlight);
+        assert_eq!(e.color_index(), 2);
+        e.select_color(3);
+        assert_eq!(e.tool(), Tool::Highlight);
+        e.select_tool(Tool::Arrow);
+        assert_eq!(e.color_index(), 0, "the arrow colour is untouched");
+        e.select_tool(Tool::Highlight);
+        assert_eq!(e.color_index(), 3);
+    }
+
+    #[test]
+    fn a_straight_highlight_can_be_selected_moved_and_stretched() {
+        let mut e = editor();
+        e.select_tool(Tool::Highlight);
+        drag(&mut e, (20.0, 50.0), (120.0, 50.0));
+        drag(&mut e, (70.0, 55.0), (70.0, 65.0));
+        assert_eq!(e.selected(), Some(e.annotations()[0].id));
+        assert_eq!(
+            highlight(&e, 0).points,
+            [Point::new(20.0, 60.0), Point::new(120.0, 60.0)]
+        );
+        assert_eq!(e.cursor_at(Point::new(120.0, 60.0)), Cursor::Hand);
+        drag(&mut e, (120.0, 60.0), (160.0, 60.0));
+        assert_eq!(highlight(&e, 0).points[1], Point::new(160.0, 60.0));
+        e.undo();
+        e.undo();
+        assert_eq!(highlight(&e, 0).points[0], Point::new(20.0, 50.0));
+    }
+
     #[test]
     fn keyboard_shortcuts() {
         assert_eq!(
@@ -916,6 +1001,10 @@ mod tests {
         assert_eq!(
             command_for_key(b'A' as u16, false, false),
             Some(Command::Tool(Tool::Arrow))
+        );
+        assert_eq!(
+            command_for_key(b'H' as u16, false, false),
+            Some(Command::Tool(Tool::Highlight))
         );
         assert_eq!(
             command_for_key(b'P' as u16, false, false),
