@@ -47,6 +47,13 @@ Wine is geen Windows. Dit moet je op een echte pc nalopen, het liefst naast de C
 - [ ] Nummers zien eruit als in de C#-versie (Segoe UI Bold, witte tekst, donkere tekst op geel).
 - [ ] Klik op een pijl of nummer selecteert (blauw gestippeld kader) en verplaatst hem, ook met een ander gereedschap actief. Pixelregio's zijn niet te selecteren.
 - [ ] Uiteinden van een geselecteerde pijl verslepen (handje als cursor); verplaatsen kan niet buiten de afbeelding.
+
+### Markeren
+
+- [ ] Markeren (`H`): een bibberige sleepbeweging over een regel tekst geeft één strakke, horizontale streep over het midden van de regel; de tekst blijft donker en leesbaar.
+- [ ] Een duidelijk schuine streep blijft schuin (maar recht); een echte bocht wordt gevolgd zonder het gebibber.
+- [ ] De markeerstift begint geel en onthoudt zijn eigen kleur; de kleur van pijlen en nummers verandert niet mee.
+- [ ] Een markering is te selecteren en te verplaatsen; een rechte markering ook aan de uiteinden te verlengen. Ongedaan maken werkt.
 - [ ] `Delete`/`Backspace` verwijdert de selectie; `Esc` deselecteert eerst en sluit pas daarna.
 - [ ] Het selectiekader komt niet mee bij kopiëren of opslaan.
 - [ ] Tooltips op alle toolbarknoppen, in de taal van Windows.

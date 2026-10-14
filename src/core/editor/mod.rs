@@ -4,6 +4,7 @@ pub mod annotation;
 pub mod arrow;
 pub mod bitmap;
 pub mod chrome;
+pub mod highlight;
 pub mod history;
 pub mod number;
 pub mod pixelate;
@@ -30,6 +31,7 @@ pub const PALETTE: [Rgb; 5] = [
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Tool {
     Arrow,
+    Highlight,
     Pixelate,
     Number,
 }
