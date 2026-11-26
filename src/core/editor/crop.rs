@@ -71,17 +71,20 @@ pub fn edges_at(rect: IRect, p: Point, reach: f64) -> Option<Edges> {
     if !inside_x || !inside_y {
         return None;
     }
-    // On a small crop the edges' reach overlaps; take the nearer side.
-    let near = |a: f64, b: f64| {
-        let (da, db) = ((p.x - a).abs(), (p.x - b).abs());
-        (da <= reach && da <= db, db <= reach && db < da)
+    // Outside the crop an edge reaches the full distance; inside at most a quarter of the
+    // crop, so a small or thin crop keeps a middle that moves it instead of resizing.
+    let near = |v: f64, lo: f64, hi: f64| {
+        let inner = reach.min((hi - lo) / 4.0);
+        let near_lo = v >= lo - reach && v <= lo + inner;
+        let near_hi = v <= hi + reach && v >= hi - inner;
+        let lo_is_nearer = (v - lo).abs() <= (hi - v).abs();
+        (
+            near_lo && (!near_hi || lo_is_nearer),
+            near_hi && (!near_lo || !lo_is_nearer),
+        )
     };
-    let (l, r) = near(left, right);
-    let near_y = |a: f64, b: f64| {
-        let (da, db) = ((p.y - a).abs(), (p.y - b).abs());
-        (da <= reach && da <= db, db <= reach && db < da)
-    };
-    let (t, b) = near_y(top, bottom);
+    let (l, r) = near(p.x, left, right);
+    let (t, b) = near(p.y, top, bottom);
     let edges = Edges {
         left: l,
         top: t,
@@ -242,6 +245,17 @@ mod tests {
         let tiny = IRect::new(50, 50, 4, 4);
         let right = edges_at(tiny, Point::new(54.5, 52.0), 6.0).unwrap();
         assert!(right.right && !right.left);
+    }
+
+    #[test]
+    fn a_small_crop_can_still_be_moved_from_its_middle() {
+        let small = IRect::new(50, 50, 10, 10);
+        assert_eq!(edges_at(small, Point::new(55.0, 55.0), 9.0), None);
+        let thin = IRect::new(50, 20, 6, 60);
+        assert_eq!(edges_at(thin, Point::new(53.0, 50.0), 9.0), None);
+        // Just outside, the edges still reach the full distance.
+        assert!(edges_at(small, Point::new(66.0, 55.0), 9.0).unwrap().right);
+        assert!(edges_at(small, Point::new(52.0, 55.0), 9.0).unwrap().left);
     }
 
     #[test]

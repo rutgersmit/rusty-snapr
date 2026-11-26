@@ -880,13 +880,35 @@ impl EditorState {
             .map(|h| h.y)
             .fold(f64::NEG_INFINITY, f64::max);
         let view = self.view_rect();
-        let (x0, y0) = (view.x as f64, view.y as f64);
-        let (x1, y1) = (view.right() as f64, view.bottom() as f64);
+        let full = self.full_rect();
         // Like Math.Clamp, but never panics if a handle somehow lies outside the image.
         let clamp = |v: f64, lo: f64, hi: f64| v.max(lo).min(hi.max(lo));
+        // Per axis: an annotation inside the shown part stays inside it. One that already
+        // sticks out of the crop (it was there before cropping) only has to stay on the image,
+        // so it follows the mouse instead of jumping into the crop.
+        let axis = |delta: f64, min: f64, max: f64, view: (i32, i32), full: (i32, i32)| {
+            let (lo, hi) = if min >= view.0 as f64 && max <= view.1 as f64 {
+                view
+            } else {
+                full
+            };
+            clamp(delta, lo as f64 - min, hi as f64 - max)
+        };
         Vector::new(
-            clamp(delta.x, x0 - min_x, x1 - max_x),
-            clamp(delta.y, y0 - min_y, y1 - max_y),
+            axis(
+                delta.x,
+                min_x,
+                max_x,
+                (view.x, view.right()),
+                (full.x, full.right()),
+            ),
+            axis(
+                delta.y,
+                min_y,
+                max_y,
+                (view.y, view.bottom()),
+                (full.y, full.bottom()),
+            ),
         )
     }
 }
@@ -1372,6 +1394,30 @@ mod tests {
             .filter(|(p, q)| p != q)
             .count();
         differing * 100 <= pixels
+    }
+
+    #[test]
+    fn an_arrow_sticking_out_of_the_crop_follows_the_mouse() {
+        let mut e = editor();
+        drag(&mut e, (20.0, 50.0), (180.0, 50.0));
+        e.select_tool(Tool::Crop);
+        drag(&mut e, (50.0, 20.0), (150.0, 80.0));
+        e.confirm();
+
+        // Grabbing it without moving changes nothing.
+        e.mouse_down(Point::new(100.0, 50.0));
+        e.mouse_move(Point::new(100.0, 50.0));
+        assert_eq!(arrow(&e, 0).start, Point::new(20.0, 50.0));
+        // Moving sideways follows the mouse (staying on the image).
+        e.mouse_move(Point::new(110.0, 55.0));
+        assert_eq!(arrow(&e, 0).start, Point::new(30.0, 55.0));
+        assert_eq!(arrow(&e, 0).end, Point::new(190.0, 55.0));
+        e.mouse_move(Point::new(200.0, 55.0));
+        assert_eq!(arrow(&e, 0).end, Point::new(200.0, 55.0));
+        e.finish_drag();
+        // Vertically it lies inside the crop, so it stays inside it.
+        drag(&mut e, (100.0, 55.0), (100.0, 200.0));
+        assert_eq!(arrow(&e, 0).end.y, 80.0);
     }
 
     #[test]

@@ -412,15 +412,18 @@ impl Editor {
         if view.scaled_image.as_ref().map(|(s, _)| *s) != Some((part, size)) {
             let image = state.image();
             let full = IRect::new(0, 0, image.width() as i32, image.height() as i32);
+            // Only a crop needs a copy of its part; the whole image is scaled from the original.
+            let cropped;
             let source = if part == full {
-                image.clone()
+                image
             } else {
-                image.crop(part)
+                cropped = image.crop(part);
+                &cropped
             };
             let scaled = if size == (part.width, part.height) {
-                source
+                source.clone()
             } else {
-                gdi::scale_bitmap(&source, size.0, size.1).unwrap_or(source)
+                gdi::scale_bitmap(source, size.0, size.1).unwrap_or_else(|_| source.clone())
             };
             view.scaled_image = Some(((part, size), scaled));
         }
