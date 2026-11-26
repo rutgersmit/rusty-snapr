@@ -138,6 +138,10 @@ impl Strings {
         self.t("Numbers (N)", "Nummers (N)")
     }
 
+    pub fn tool_crop(&self) -> &'static str {
+        self.t("Crop (C)", "Bijsnijden (C)")
+    }
+
     /// Tooltips of the five colour swatches, in toolbar order.
     pub fn colors(&self) -> [&'static str; 5] {
         [
@@ -167,8 +171,15 @@ impl Strings {
 
     pub fn editor_hint(&self) -> &'static str {
         self.t(
-            "A arrow  ·  H highlight  ·  P pixelate  ·  N numbers  ·  Del delete  ·  Ctrl+C copy  ·  Ctrl+S save  ·  Esc close",
-            "A pijl  ·  H markeren  ·  P pixeleren  ·  N nummers  ·  Del verwijderen  ·  Ctrl+C kopiëren  ·  Ctrl+S opslaan  ·  Esc sluiten",
+            "A arrow  ·  H highlight  ·  P pixelate  ·  N numbers  ·  C crop  ·  Del delete  ·  Ctrl+C copy  ·  Ctrl+S save  ·  Esc close",
+            "A pijl  ·  H markeren  ·  P pixeleren  ·  N nummers  ·  C bijsnijden  ·  Del verwijderen  ·  Ctrl+C kopiëren  ·  Ctrl+S opslaan  ·  Esc sluiten",
+        )
+    }
+
+    pub fn crop_hint(&self) -> &'static str {
+        self.t(
+            "Drag to choose what to keep  ·  Drag the edges to adjust  ·  Del removes the crop  ·  Enter or Esc when done",
+            "Sleep om te kiezen wat je houdt  ·  Sleep aan de randen om bij te stellen  ·  Del haalt het bijsnijden weg  ·  Enter of Esc als je klaar bent",
         )
     }
 

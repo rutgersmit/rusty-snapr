@@ -4,6 +4,7 @@ pub mod annotation;
 pub mod arrow;
 pub mod bitmap;
 pub mod chrome;
+pub mod crop;
 pub mod highlight;
 pub mod history;
 pub mod number;
@@ -34,6 +35,8 @@ pub enum Tool {
     Highlight,
     Pixelate,
     Number,
+    /// Not a drawing tool: shows the whole screenshot so the part to keep can be chosen.
+    Crop,
 }
 
 /// Rounds like .NET's `Math.Round` (halves to even), so sizes match the C# version exactly.

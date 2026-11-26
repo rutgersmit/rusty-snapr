@@ -7,14 +7,15 @@ use tiny_skia::{FillRule, Paint, PathBuilder, PixmapMut, Stroke, StrokeDash, Tra
 use super::annotation::{Annotation, Shape};
 use super::arrow::Arrow;
 use super::chrome::ACCENT;
+use super::crop::{self, Edges, ResizeCursor};
 use super::highlight::Highlight;
-use super::history::History;
+use super::history::{Document, History};
 use super::number::Number;
 use super::pixelate::Pixelate;
 use super::render;
 use super::{Bitmap, PALETTE, Tool, round_like_dotnet};
 use crate::draw;
-use crate::geometry::{Point, Vector};
+use crate::geometry::{IRect, Point, Vector};
 use crate::hotkey::vk;
 
 /// What needs repainting after a change.
@@ -55,9 +56,11 @@ impl Changes {
 /// Something the user asked for with the keyboard or the toolbar.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Command {
-    /// Deselects, or closes the editor when nothing is selected.
+    /// Leaves the crop tool, deselects, or closes the editor when there is nothing to leave.
     Escape,
-    /// Deletes the selected annotation.
+    /// Enter: leaves the crop tool, keeping the crop.
+    Confirm,
+    /// Deletes the selected annotation (with the crop tool: removes the crop).
     Delete,
     Undo,
     Redo,
@@ -70,6 +73,7 @@ pub enum Command {
 /// The editor's keyboard shortcuts.
 pub fn command_for_key(key: u16, ctrl: bool, shift: bool) -> Option<Command> {
     const BACK: u16 = 0x08;
+    const RETURN: u16 = 0x0D;
     const DELETE: u16 = 0x2E;
     const KEY_A: u16 = b'A' as u16;
     const KEY_B: u16 = b'B' as u16;
@@ -84,11 +88,13 @@ pub fn command_for_key(key: u16, ctrl: bool, shift: bool) -> Option<Command> {
     const KEY_5: u16 = b'5' as u16;
     Some(match key {
         vk::ESCAPE => Command::Escape,
+        RETURN => Command::Confirm,
         DELETE | BACK => Command::Delete,
         KEY_Z if ctrl && shift => Command::Redo,
         KEY_Z if ctrl => Command::Undo,
         KEY_Y if ctrl => Command::Redo,
         KEY_C if ctrl => Command::Copy,
+        KEY_C => Command::Tool(Tool::Crop),
         KEY_S if ctrl => Command::Save,
         KEY_A if !ctrl => Command::Tool(Tool::Arrow),
         KEY_H if !ctrl => Command::Tool(Tool::Highlight),
@@ -108,14 +114,36 @@ pub enum Cursor {
     Move,
     /// Over an end point of the selected arrow or straight highlight.
     Hand,
+    /// Over an edge or corner of the crop.
+    Resize(ResizeCursor),
 }
 
 #[derive(Debug, Clone, PartialEq)]
 enum Drag {
     None,
     Create,
-    Move { start: Point, original: Vec<Point> },
-    Handle { index: usize, original: Vec<Point> },
+    Move {
+        start: Point,
+        original: Vec<Point>,
+    },
+    Handle {
+        index: usize,
+        original: Vec<Point>,
+    },
+    /// Drawing a new crop from `anchor`; `original` is the crop before the drag.
+    CropNew {
+        anchor: Point,
+        original: Option<IRect>,
+    },
+    CropMove {
+        start: Point,
+        original: IRect,
+    },
+    CropResize {
+        start: Point,
+        edges: Edges,
+        original: IRect,
+    },
 }
 
 pub struct EditorState {
@@ -128,6 +156,10 @@ pub struct EditorState {
     color: usize,
     /// The highlighter keeps its own colour, yellow at first.
     highlight_color: usize,
+    /// The tool to go back to when leaving the crop tool.
+    tool_before_crop: Tool,
+    /// The part of the image that is kept, in image pixels; `None` keeps everything.
+    crop: Option<IRect>,
     /// Display scale (1.0 = 96 DPI); sizes annotations and handles like the C# version.
     scale: f64,
     /// The annotation being drawn by the current drag.
@@ -149,6 +181,8 @@ impl EditorState {
             tool: Tool::Arrow,
             color: 0,
             highlight_color: 2,
+            tool_before_crop: Tool::Arrow,
+            crop: None,
             scale,
             pending: None,
             drag: Drag::None,
@@ -178,13 +212,45 @@ impl EditorState {
         self.tool
     }
 
-    /// The colour the current tool draws with (pixelate shows the arrow's).
+    /// The colour the current tool draws with (pixelate shows the arrow's, crop the colour of
+    /// the tool it returns to).
     pub fn color_index(&self) -> usize {
-        if self.tool == Tool::Highlight {
+        let tool = if self.tool == Tool::Crop {
+            self.tool_before_crop
+        } else {
+            self.tool
+        };
+        if tool == Tool::Highlight {
             self.highlight_color
         } else {
             self.color
         }
+    }
+
+    /// The part of the image that is kept, if it was cropped.
+    pub fn crop(&self) -> Option<IRect> {
+        self.crop
+    }
+
+    /// The size of the image that is copied and saved.
+    pub fn output_size(&self) -> (u32, u32) {
+        match self.crop {
+            Some(crop) => (crop.width as u32, crop.height as u32),
+            None => (self.image.width(), self.image.height()),
+        }
+    }
+
+    /// The part of the image the editor shows: the crop, or everything while cropping (so the
+    /// crop can be changed).
+    pub fn view_rect(&self) -> IRect {
+        match self.crop {
+            Some(crop) if self.tool != Tool::Crop => crop,
+            _ => self.full_rect(),
+        }
+    }
+
+    fn full_rect(&self) -> IRect {
+        IRect::new(0, 0, self.image.width() as i32, self.image.height() as i32)
     }
 
     pub fn can_undo(&self) -> bool {
@@ -251,6 +317,9 @@ impl EditorState {
         if self.is_dragging() {
             return Changes::NONE;
         }
+        if self.tool == Tool::Crop {
+            return self.crop_mouse_down(p);
+        }
 
         if let Some(id) = self.selected
             && let Some(index) = self.handle_at(id, p)
@@ -286,6 +355,7 @@ impl EditorState {
                 self.pixel_block_size(),
                 fastrand::i32(0..i32::MAX),
             )),
+            Tool::Crop => unreachable!("handled above"),
         };
         self.pending = Some(Annotation {
             id: self.next_id,
@@ -296,9 +366,53 @@ impl EditorState {
         Changes::IMAGE
     }
 
+    fn crop_mouse_down(&mut self, p: Point) -> Changes {
+        if let Some(rect) = self.crop {
+            if let Some(edges) = crop::edges_at(rect, p, self.crop_reach()) {
+                self.drag = Drag::CropResize {
+                    start: p,
+                    edges,
+                    original: rect,
+                };
+                return Changes::NONE;
+            }
+            if crop::contains(rect, p) {
+                self.drag = Drag::CropMove {
+                    start: p,
+                    original: rect,
+                };
+                return Changes::NONE;
+            }
+        }
+        self.drag = Drag::CropNew {
+            anchor: self.clamp_to(p, self.full_rect()),
+            original: self.crop,
+        };
+        Changes::NONE
+    }
+
     pub fn mouse_move(&mut self, p: Point) -> Changes {
+        let (w, h) = (self.image.width(), self.image.height());
         match self.drag.clone() {
             Drag::None => Changes::NONE,
+            Drag::CropNew { anchor, original } => {
+                let rect = crop::from_points(anchor, p, w, h);
+                // Until the drag is big enough, keep showing the crop there was.
+                let crop = if crop::is_usable(rect) {
+                    Some(rect)
+                } else {
+                    original
+                };
+                self.set_live_crop(crop)
+            }
+            Drag::CropMove { start, original } => {
+                self.set_live_crop(Some(crop::moved(original, p - start, w, h)))
+            }
+            Drag::CropResize {
+                start,
+                edges,
+                original,
+            } => self.set_live_crop(Some(crop::resize(original, edges, p - start, w, h))),
             Drag::Move { start, original } => {
                 let delta = self.clamp_move(&original, p - start);
                 let moved: Vec<Point> = original.iter().map(|&h| h + delta).collect();
@@ -331,6 +445,10 @@ impl EditorState {
     pub fn finish_drag(&mut self) -> Changes {
         match std::mem::replace(&mut self.drag, Drag::None) {
             Drag::None => Changes::NONE,
+            Drag::CropNew { original, .. } => self.finish_crop(original),
+            Drag::CropMove { original, .. } | Drag::CropResize { original, .. } => {
+                self.finish_crop(Some(original))
+            }
             Drag::Move { original, .. } | Drag::Handle { original, .. } => {
                 if let Some(id) = self.selected {
                     let current = self.handles_of(id);
@@ -356,7 +474,39 @@ impl EditorState {
         }
     }
 
+    fn set_live_crop(&mut self, crop: Option<IRect>) -> Changes {
+        if self.crop == crop {
+            return Changes::NONE;
+        }
+        self.crop = crop;
+        Changes::IMAGE
+    }
+
+    fn finish_crop(&mut self, original: Option<IRect>) -> Changes {
+        if self.crop == original {
+            return Changes::NONE;
+        }
+        self.history.record_crop(original, self.crop);
+        self.committed();
+        Changes::ALL
+    }
+
+    /// How far from an edge of the crop it can still be grabbed, in image pixels.
+    fn crop_reach(&self) -> f64 {
+        self.handle_radius() + self.hit_tolerance()
+    }
+
     pub fn cursor_at(&self, p: Point) -> Cursor {
+        if self.tool == Tool::Crop {
+            return match self.crop {
+                Some(rect) => match crop::edges_at(rect, p, self.crop_reach()) {
+                    Some(edges) => Cursor::Resize(edges.cursor()),
+                    None if crop::contains(rect, p) => Cursor::Move,
+                    None => Cursor::Cross,
+                },
+                None => Cursor::Cross,
+            };
+        }
         if let Some(id) = self.selected
             && self.handle_at(id, p).is_some()
         {
@@ -417,12 +567,37 @@ impl EditorState {
 
     // ---- Commands ------------------------------------------------------------------------
 
-    /// Escape: deselects. Returns `None` when nothing was selected, meaning "close the editor".
+    /// Escape: leaves the crop tool or deselects. Returns `None` when there was nothing to
+    /// leave, meaning "close the editor".
     pub fn escape(&mut self) -> Option<Changes> {
+        if self.tool == Tool::Crop {
+            return Some(self.leave_crop());
+        }
         self.selected.is_some().then(|| self.deselect())
     }
 
+    /// Enter: leaves the crop tool, keeping the crop.
+    pub fn confirm(&mut self) -> Changes {
+        if self.tool == Tool::Crop {
+            self.leave_crop()
+        } else {
+            Changes::NONE
+        }
+    }
+
+    fn leave_crop(&mut self) -> Changes {
+        if self.is_dragging() {
+            self.finish_drag();
+        }
+        self.tool = self.tool_before_crop;
+        Changes::ALL
+    }
+
+    /// Deletes the selected annotation; with the crop tool, removes the crop instead.
     pub fn delete_selected(&mut self) -> Changes {
+        if self.tool == Tool::Crop {
+            return self.remove_crop();
+        }
         let Some(id) = self.selected.take() else {
             return Changes::NONE;
         };
@@ -431,8 +606,25 @@ impl EditorState {
         Changes::ALL
     }
 
+    fn remove_crop(&mut self) -> Changes {
+        if self.is_dragging() {
+            return Changes::NONE;
+        }
+        let Some(original) = self.crop.take() else {
+            return Changes::NONE;
+        };
+        self.finish_crop(Some(original))
+    }
+
     pub fn undo(&mut self) -> Changes {
-        if self.history.undo(&mut self.annotations) {
+        if self.is_dragging() {
+            return Changes::NONE;
+        }
+        let doc = Document {
+            annotations: &mut self.annotations,
+            crop: &mut self.crop,
+        };
+        if self.history.undo(doc) {
             self.after_history_change()
         } else {
             Changes::NONE
@@ -440,7 +632,14 @@ impl EditorState {
     }
 
     pub fn redo(&mut self) -> Changes {
-        if self.history.redo(&mut self.annotations) {
+        if self.is_dragging() {
+            return Changes::NONE;
+        }
+        let doc = Document {
+            annotations: &mut self.annotations,
+            crop: &mut self.crop,
+        };
+        if self.history.redo(doc) {
             self.after_history_change()
         } else {
             Changes::NONE
@@ -459,6 +658,24 @@ impl EditorState {
     }
 
     pub fn select_tool(&mut self, tool: Tool) -> Changes {
+        if self.is_dragging() {
+            return Changes::NONE;
+        }
+        if self.tool == Tool::Crop {
+            // The crop button and key toggle; any other tool also leaves cropping.
+            let left = self.leave_crop();
+            return if tool == Tool::Crop {
+                left
+            } else {
+                left.or(self.select_tool(tool))
+            };
+        }
+        if tool == Tool::Crop {
+            self.tool_before_crop = self.tool;
+            self.tool = Tool::Crop;
+            self.deselect();
+            return Changes::ALL;
+        }
         let changed = self.tool != tool;
         self.tool = tool;
         let toolbar = if changed {
@@ -470,12 +687,18 @@ impl EditorState {
     }
 
     pub fn select_color(&mut self, index: usize) -> Changes {
-        if index >= PALETTE.len() {
+        if index >= PALETTE.len() || self.is_dragging() {
             return Changes::NONE;
         }
+        // A colour is for drawing, so it ends cropping first.
+        let left = if self.tool == Tool::Crop {
+            self.leave_crop()
+        } else {
+            Changes::NONE
+        };
         if self.tool == Tool::Highlight {
             self.highlight_color = index;
-            return Changes::TOOLBAR;
+            return Changes::TOOLBAR.or(left);
         }
         self.color = index;
         // Pixelate has no colour, so picking one switches back to the arrow.
@@ -484,14 +707,25 @@ impl EditorState {
         } else {
             Changes::NONE
         };
-        Changes::TOOLBAR.or(tool)
+        Changes::TOOLBAR.or(tool).or(left)
     }
 
     // ---- Rendering -----------------------------------------------------------------------
 
-    /// The screenshot with all committed annotations, at full size (for copying and saving).
+    /// The screenshot with all committed annotations, cut to the crop, at full size (for copying
+    /// and saving).
     pub fn flatten(&self) -> Bitmap {
-        render::flatten(&self.image, &self.annotations)
+        let flat = render::flatten(&self.image, &self.annotations);
+        match self.crop {
+            Some(crop) => flat.crop(crop),
+            None => flat,
+        }
+    }
+
+    /// Maps image pixels onto a bitmap that shows [`Self::view_rect`] at `zoom` times its size.
+    fn view_transform(&self, zoom: f32) -> Transform {
+        let view = self.view_rect();
+        Transform::from_scale(zoom, zoom).pre_translate(-view.x as f32, -view.y as f32)
     }
 
     /// The annotation that changes with every mouse move, if any: the selected one while it is
@@ -503,16 +737,22 @@ impl EditorState {
         }
     }
 
-    /// Draws the committed annotations except `exclude` onto `target`, which shows the image at
-    /// `zoom` times its size (the editor draws at screen size).
+    /// Draws the committed annotations except `exclude` onto `target`, which shows
+    /// [`Self::view_rect`] at `zoom` times its size (the editor draws at screen size).
     pub fn draw_committed(&self, target: &mut Bitmap, exclude: Option<u32>, zoom: f32) {
         let annotations = self.annotations.iter().filter(|a| Some(a.id) != exclude);
-        render::draw_annotations_scaled(target, annotations, zoom);
+        render::draw_annotations_transformed(target, annotations, self.view_transform(zoom));
     }
 
-    /// The screenshot with the committed annotations except `exclude`, at full size.
+    /// [`Self::view_rect`] of the screenshot with the committed annotations except `exclude`,
+    /// at full size.
     pub fn render_base(&self, exclude: Option<u32>) -> Bitmap {
-        let mut base = self.image.clone();
+        let view = self.view_rect();
+        let mut base = if view == self.full_rect() {
+            self.image.clone()
+        } else {
+            self.image.crop(view)
+        };
         self.draw_committed(&mut base, exclude, 1.0);
         base
     }
@@ -520,14 +760,26 @@ impl EditorState {
     /// Draws what goes on top of [`Self::draw_committed`]: the annotation being moved or drawn
     /// and the selection outline (editor-only, never exported). `zoom` as there.
     pub fn render_overlay(&self, target: &mut Bitmap, zoom: f32) {
+        let transform = self.view_transform(zoom);
         let live = self
             .live_id()
             .and_then(|id| self.annotations.iter().find(|a| a.id == id));
-        render::draw_annotations_scaled(
+        render::draw_annotations_transformed(
             target,
             live.into_iter().chain(self.pending.as_ref()),
-            zoom,
+            transform,
         );
+
+        if self.tool == Tool::Crop
+            && let Some(rect) = self.crop
+        {
+            let (width, height) = (target.width(), target.height());
+            if let Some(mut pixmap) = PixmapMut::from_bytes(target.pixels_mut(), width, height) {
+                let size = (self.image.width(), self.image.height());
+                let handle = 2.0 * self.handle_radius();
+                crop::render_frame(&mut pixmap, rect, size, handle, transform);
+            }
+        }
 
         let Some(selected) = self
             .selected
@@ -537,13 +789,15 @@ impl EditorState {
         };
         let (width, height) = (target.width(), target.height());
         if let Some(mut pixmap) = PixmapMut::from_bytes(target.pixels_mut(), width, height) {
-            self.draw_selection(&mut pixmap, selected, Transform::from_scale(zoom, zoom));
+            self.draw_selection(&mut pixmap, selected, transform);
         }
     }
 
     /// Whether there is anything for [`Self::render_overlay`] to draw.
     pub fn has_overlay(&self) -> bool {
-        self.pending.is_some() || self.selected.is_some()
+        self.pending.is_some()
+            || self.selected.is_some()
+            || (self.tool == Tool::Crop && self.crop.is_some())
     }
 
     fn draw_selection(
@@ -600,14 +854,20 @@ impl EditorState {
         self.revision += 1;
     }
 
+    /// Keeps a point on the part of the image that is shown.
     fn clamp_to_image(&self, p: Point) -> Point {
+        self.clamp_to(p, self.view_rect())
+    }
+
+    fn clamp_to(&self, p: Point, rect: IRect) -> Point {
         Point::new(
-            p.x.clamp(0.0, self.image.width() as f64),
-            p.y.clamp(0.0, self.image.height() as f64),
+            p.x.clamp(rect.x as f64, rect.right() as f64),
+            p.y.clamp(rect.y as f64, rect.bottom() as f64),
         )
     }
 
-    /// Limits a move so every handle stays on the image, keeping the shape intact.
+    /// Limits a move so every handle stays on the shown part of the image, keeping the shape
+    /// intact.
     fn clamp_move(&self, handles: &[Point], delta: Vector) -> Vector {
         let min_x = handles.iter().map(|h| h.x).fold(f64::INFINITY, f64::min);
         let max_x = handles
@@ -619,12 +879,14 @@ impl EditorState {
             .iter()
             .map(|h| h.y)
             .fold(f64::NEG_INFINITY, f64::max);
-        let (w, h) = (self.image.width() as f64, self.image.height() as f64);
+        let view = self.view_rect();
+        let (x0, y0) = (view.x as f64, view.y as f64);
+        let (x1, y1) = (view.right() as f64, view.bottom() as f64);
         // Like Math.Clamp, but never panics if a handle somehow lies outside the image.
         let clamp = |v: f64, lo: f64, hi: f64| v.max(lo).min(hi.max(lo));
         Vector::new(
-            clamp(delta.x, -min_x, w - max_x),
-            clamp(delta.y, -min_y, h - max_y),
+            clamp(delta.x, x0 - min_x, x1 - max_x),
+            clamp(delta.y, y0 - min_y, y1 - max_y),
         )
     }
 }
@@ -977,6 +1239,152 @@ mod tests {
     }
 
     #[test]
+    fn cropping_keeps_a_part_of_the_image() {
+        let mut e = editor();
+        drag(&mut e, (20.0, 50.0), (180.0, 50.0)); // a red arrow across the image
+        e.select_tool(Tool::Crop);
+        assert_eq!(
+            e.view_rect(),
+            IRect::new(0, 0, 200, 100),
+            "cropping shows everything"
+        );
+        drag(&mut e, (150.0, 80.0), (50.4, 20.0));
+        assert_eq!(e.crop(), Some(IRect::new(50, 20, 100, 60)));
+        assert_eq!(e.output_size(), (100, 60));
+        assert_eq!(e.view_rect(), IRect::new(0, 0, 200, 100), "still cropping");
+        assert!(e.changed_since_copy());
+
+        assert_eq!(e.confirm(), Changes::ALL);
+        assert_eq!(e.tool(), Tool::Arrow, "back to the tool before");
+        assert_eq!(e.view_rect(), IRect::new(50, 20, 100, 60));
+        let flat = e.flatten();
+        assert_eq!((flat.width(), flat.height()), (100, 60));
+        assert_eq!(
+            flat.pixel(50, 30),
+            [0x30, 0x3B, 0xFF, 255],
+            "the arrow, moved with the crop"
+        );
+        let base = e.render_base(None);
+        assert!(
+            nearly_equal(&base, &flat),
+            "the editor shows what is exported"
+        );
+    }
+
+    #[test]
+    fn a_click_does_not_crop() {
+        let mut e = editor();
+        e.select_tool(Tool::Crop);
+        drag(&mut e, (50.0, 50.0), (52.0, 51.0));
+        assert_eq!(e.crop(), None);
+        assert!(!e.can_undo());
+    }
+
+    #[test]
+    fn the_crop_can_be_moved_resized_removed_and_undone() {
+        let mut e = editor();
+        e.select_tool(Tool::Crop);
+        drag(&mut e, (50.0, 20.0), (150.0, 80.0));
+        assert_eq!(e.cursor_at(Point::new(100.0, 50.0)), Cursor::Move);
+        assert_eq!(
+            e.cursor_at(Point::new(151.0, 81.0)),
+            Cursor::Resize(ResizeCursor::NwSe)
+        );
+        assert_eq!(e.cursor_at(Point::new(10.0, 10.0)), Cursor::Cross);
+
+        drag(&mut e, (100.0, 50.0), (300.0, 50.0)); // move: stops at the right edge
+        assert_eq!(e.crop(), Some(IRect::new(100, 20, 100, 60)));
+        drag(&mut e, (100.0, 50.0), (80.0, 50.0)); // the left edge
+        assert_eq!(e.crop(), Some(IRect::new(80, 20, 120, 60)));
+
+        e.delete_selected();
+        assert_eq!(e.crop(), None);
+        e.undo();
+        assert_eq!(e.crop(), Some(IRect::new(80, 20, 120, 60)));
+        e.undo();
+        e.undo();
+        assert_eq!(e.crop(), Some(IRect::new(50, 20, 100, 60)));
+        e.undo();
+        assert_eq!(e.crop(), None);
+        e.redo();
+        assert_eq!(e.crop(), Some(IRect::new(50, 20, 100, 60)));
+    }
+
+    #[test]
+    fn leaving_the_crop_tool() {
+        let mut e = editor();
+        e.select_tool(Tool::Highlight);
+        e.select_tool(Tool::Crop);
+        assert_eq!(
+            e.color_index(),
+            2,
+            "shows the colour of the tool it returns to"
+        );
+        assert_eq!(
+            e.escape(),
+            Some(Changes::ALL),
+            "Esc leaves cropping, not the editor"
+        );
+        assert_eq!(e.tool(), Tool::Highlight);
+
+        e.select_tool(Tool::Crop);
+        e.select_tool(Tool::Crop);
+        assert_eq!(e.tool(), Tool::Highlight, "the crop button toggles");
+
+        e.select_tool(Tool::Crop);
+        e.select_tool(Tool::Number);
+        assert_eq!(e.tool(), Tool::Number);
+
+        e.select_tool(Tool::Crop);
+        e.select_color(4);
+        assert_eq!(e.tool(), Tool::Number, "a colour ends cropping");
+        assert_eq!(e.color_index(), 4);
+    }
+
+    #[test]
+    fn annotations_stay_inside_the_crop() {
+        let mut e = editor();
+        e.select_tool(Tool::Crop);
+        drag(&mut e, (50.0, 20.0), (150.0, 80.0));
+        e.confirm();
+        e.mouse_down(Point::new(60.0, 30.0));
+        e.mouse_move(Point::new(400.0, 400.0));
+        e.finish_drag();
+        assert_eq!(arrow(&e, 0).end, Point::new(150.0, 80.0));
+
+        // Drawing in the cropped view matches the exported image.
+        let mut view = e.render_base(None);
+        e.render_overlay(&mut view, 1.0);
+        assert!(nearly_equal(&view, &e.flatten()));
+    }
+
+    /// Same size, and at most a few anti-aliased pixels differ (tiny-skia's coverage depends a
+    /// little on where a path lies relative to the bitmap's origin).
+    fn nearly_equal(a: &Bitmap, b: &Bitmap) -> bool {
+        if (a.width(), a.height()) != (b.width(), b.height()) {
+            return false;
+        }
+        let pixels = (a.width() * a.height()) as usize;
+        let differing = a
+            .pixels()
+            .chunks_exact(4)
+            .zip(b.pixels().chunks_exact(4))
+            .filter(|(p, q)| p != q)
+            .count();
+        differing * 100 <= pixels
+    }
+
+    #[test]
+    fn the_crop_frame_is_only_shown_while_cropping() {
+        let mut e = editor();
+        e.select_tool(Tool::Crop);
+        drag(&mut e, (50.0, 20.0), (150.0, 80.0));
+        assert!(e.has_overlay());
+        e.confirm();
+        assert!(!e.has_overlay());
+    }
+
+    #[test]
     fn keyboard_shortcuts() {
         assert_eq!(
             command_for_key(b'Z' as u16, true, false),
@@ -1029,6 +1437,11 @@ mod tests {
         );
         assert_eq!(command_for_key(0x2E, false, false), Some(Command::Delete));
         assert_eq!(command_for_key(0x08, false, false), Some(Command::Delete));
+        assert_eq!(
+            command_for_key(b'C' as u16, false, false),
+            Some(Command::Tool(Tool::Crop))
+        );
+        assert_eq!(command_for_key(0x0D, false, false), Some(Command::Confirm));
         assert_eq!(command_for_key(b'Q' as u16, false, false), None);
     }
 }

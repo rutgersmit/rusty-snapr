@@ -75,3 +75,12 @@ Wine is geen Windows. Dit moet je op een echte pc nalopen, het liefst naast de C
 - [ ] `Enter` in de overlay op twee 4K-schermen: de editor opent vlot, en tekenen en verslepen blijven vloeiend.
 - [ ] Een fout veroorzaken is lastig; controleer in elk geval dat `%AppData%\RustySnapr\snapr.log` niet ontstaat bij normaal gebruik.
 - [ ] Vergelijk opstarttijd en geheugengebruik (Taakbeheer) met de C#-versie.
+
+### Bijsnijden
+
+- [ ] Bijsnijden (`C` of de knop): de hele screenshot is zichtbaar; slepen tekent een kader, buiten het kader wordt het beeld donkerder. De statusbalk toont de bijsnijdhint en de maat van het kader.
+- [ ] Randen en hoeken van het kader verslepen (pijltjescursor in de juiste richting); binnen het kader slepen verschuift het; het blijft op de afbeelding.
+- [ ] `Enter`, `Esc`, nog eens `C`, een ander gereedschap of een kleur: terug naar het vorige gereedschap, en de editor toont alleen het bijgesneden deel (scherp als het past).
+- [ ] Pijlen, markeringen en nummers blijven binnen het bijgesneden deel; tekenen en verplaatsen klopt met de muis.
+- [ ] `Delete` tijdens bijsnijden haalt het kader weg; `Ctrl+Z`/`Ctrl+Y` maken bijsnijden ongedaan en opnieuw, ook buiten het bijsnijdgereedschap.
+- [ ] Kopiëren, opslaan en sluiten na bijsnijden geven precies het bijgesneden beeld, zonder kader of handvatten.

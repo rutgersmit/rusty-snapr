@@ -14,6 +14,7 @@ Hetzelfde als de C#-versie:
 - **Markeren** (`H`): een markeerstift die over tekst kleurt (tekst blijft leesbaar). Een bibberige, ongeveer rechte sleepbeweging wordt één strakke streep, die recht trekt naar horizontaal (of verticaal) als hij daar dichtbij ligt; alleen een duidelijke bocht wordt gevolgd, en dan glad gestreken. De markeerstift onthoudt zijn eigen kleur (eerst geel).
 - **Pixeleren** (`P`): sleep over tekst om die onleesbaar te maken, met een beetje willekeurige ruis per blok.
 - **Nummers** (`N`): elke klik plaatst het volgende nummer; slepen verfijnt de plek.
+- **Bijsnijden** (`C`): toont de hele screenshot; sleep een rechthoek om te kiezen wat je houdt, sleep aan de randen of hoeken om bij te stellen, of sleep erbinnen om hem te verschuiven. `Delete` haalt het bijsnijden weg, `Enter` of `Esc` (of `C` nogmaals) terug naar het vorige gereedschap. Het bijsnijden is niet-destructief: annotaties blijven staan en `Ctrl+Z` maakt het ongedaan. Kopiëren en opslaan geven het bijgesneden beeld.
 - **Verplaatsen**: klik op een pijl, markering of nummer om hem te selecteren en te verslepen; sleep een uiteinde van een pijl of rechte markering om hem te vervormen. `Delete` verwijdert, `Esc` deselecteert.
 - Ongedaan maken / opnieuw (`Ctrl+Z` / `Ctrl+Y`), kopiëren (`Ctrl+C`), opslaan als PNG (`Ctrl+S`), sluiten (`Esc`).
 - De screenshot staat direct op het klembord; sluit je de editor na bewerken, dan staat de bewerkte versie op het klembord.

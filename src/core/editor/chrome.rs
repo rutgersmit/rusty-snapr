@@ -120,6 +120,8 @@ pub fn layout(client: (i32, i32), image: (u32, u32), scale: f64) -> Layout {
         button(&mut x, Button::Tool(tool), &mut buttons);
     }
     separator(&mut x, &mut separators);
+    button(&mut x, Button::Tool(Tool::Crop), &mut buttons);
+    separator(&mut x, &mut separators);
     for index in 0..PALETTE.len() {
         x += BUTTON_MARGIN;
         let y = (toolbar_height() - SWATCH_SIZE) / 2.0;
@@ -451,6 +453,12 @@ fn icon_path(button: Button) -> (Option<Path>, bool) {
             }
             true
         }
+        // Two interlocking corners: M6,2 V18 H22 M2,6 H18 V22
+        Button::Tool(Tool::Crop) => {
+            polyline(&mut pb, &[(6.0, 2.0), (6.0, 18.0), (22.0, 18.0)]);
+            polyline(&mut pb, &[(2.0, 6.0), (18.0, 6.0), (18.0, 22.0)]);
+            false
+        }
         // M9,5 L4,10 L9,15 M4,10 H15 A5,5 0 0 1 15,20 H11
         Button::Undo => {
             polyline(&mut pb, &[(9.0, 5.0), (4.0, 10.0), (9.0, 15.0)]);
@@ -639,8 +647,13 @@ mod tests {
         // Separator: 162 + 8.
         assert_eq!(l.separators[0], IRect::new(170, 14, 1, 20));
         assert_eq!(
+            l.button_rect(Button::Tool(Tool::Crop)),
+            Some(IRect::new(181, 7, 34, 34))
+        );
+        assert_eq!(l.separators[1], IRect::new(225, 14, 1, 20));
+        assert_eq!(
             l.button_rect(Button::Color(0)),
-            Some(IRect::new(181, 12, 24, 24))
+            Some(IRect::new(236, 12, 24, 24))
         );
         assert_eq!(
             l.button_rect(Button::Save),

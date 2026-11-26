@@ -6,9 +6,10 @@ use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use snapr_core::editor::chrome::{self, Button, Layout, ToolbarState};
+use snapr_core::editor::crop::ResizeCursor;
 use snapr_core::editor::state::{Changes, Command, Cursor, EditorState, command_for_key};
 use snapr_core::editor::{Bitmap, Rgb, Tool, png};
-use snapr_core::geometry::IRect;
+use snapr_core::geometry::{IRect, Point};
 use snapr_core::{APP_NAME, strings};
 use tiny_skia::PixmapMut;
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, RECT, WPARAM};
@@ -16,10 +17,10 @@ use windows::Win32::Graphics::Gdi::HDC;
 use windows::Win32::UI::Controls::WM_MOUSELEAVE;
 use windows::Win32::UI::Input::KeyboardAndMouse::{VK_CONTROL, VK_SHIFT};
 use windows::Win32::UI::WindowsAndMessaging::{
-    HTCLIENT, IDC_ARROW, IDC_CROSS, IDC_HAND, IDC_SIZEALL, MINMAXINFO, WINDOW_EX_STYLE,
-    WM_CAPTURECHANGED, WM_CLOSE, WM_DPICHANGED, WM_ERASEBKGND, WM_GETMINMAXINFO, WM_KEYDOWN,
-    WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_NCDESTROY, WM_PAINT, WM_SETCURSOR, WM_SIZE,
-    WS_OVERLAPPEDWINDOW,
+    HTCLIENT, IDC_ARROW, IDC_CROSS, IDC_HAND, IDC_SIZEALL, IDC_SIZENESW, IDC_SIZENS, IDC_SIZENWSE,
+    IDC_SIZEWE, MINMAXINFO, WINDOW_EX_STYLE, WM_CAPTURECHANGED, WM_CLOSE, WM_DPICHANGED,
+    WM_ERASEBKGND, WM_GETMINMAXINFO, WM_KEYDOWN, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE,
+    WM_NCDESTROY, WM_PAINT, WM_SETCURSOR, WM_SIZE, WS_OVERLAPPEDWINDOW,
 };
 use windows::core::{PCWSTR, Result, w};
 
@@ -62,11 +63,14 @@ pub fn open(image: Bitmap) -> Result<()> {
     );
 
     let size = (image.width(), image.height());
+    let shown = IRect::new(0, 0, size.0 as i32, size.1 as i32);
     let editor = Rc::new(Editor {
         hwnd: Cell::new(HWND::default()),
         state: RefCell::new(EditorState::new(image, scale)),
         view: RefCell::new(View {
             layout: chrome::layout(client, size, scale),
+            shown,
+            cropping: false,
             hover: None,
             pressed: None,
             tracking_leave: false,
@@ -116,21 +120,28 @@ struct Editor {
 
 struct View {
     layout: Layout,
+    /// The part of the image the layout was made for ([`EditorState::view_rect`]).
+    shown: IRect,
+    /// Whether the crop tool was active at the last change, to switch the status text.
+    cropping: bool,
     hover: Option<Button>,
     /// Toolbar button under a mouse press, clicked when released over it.
     pressed: Option<Button>,
     tracking_leave: bool,
     status: String,
-    /// The screenshot at the size it is shown, and that size.
-    scaled_image: Option<((i32, i32), Bitmap)>,
+    /// The shown part of the screenshot at the size it is shown, and what it was made for.
+    scaled_image: Option<(ScaledKey, Bitmap)>,
     /// `scaled_image` with the committed annotations (minus the one being moved) drawn at screen
     /// size, and what it was made for.
     composite: Option<(CompositeKey, Bitmap)>,
     fonts: Fonts,
 }
 
-/// State revision, the annotation left out, and the size shown.
-type CompositeKey = (u64, Option<u32>, (i32, i32));
+/// The part of the image shown and the size it is shown at.
+type ScaledKey = (IRect, (i32, i32));
+
+/// State revision, the annotation left out, the part of the image shown and the size it is shown at.
+type CompositeKey = (u64, Option<u32>, IRect, (i32, i32));
 
 struct Fonts {
     text: Font,
@@ -245,11 +256,12 @@ impl Editor {
             return; // minimised
         }
         let scale = window::scale_of(self.hwnd());
-        let size = {
-            let state = self.state.borrow();
-            (state.image().width(), state.image().height())
-        };
-        self.view.borrow_mut().layout = chrome::layout(client, size, scale);
+        let shown = self.state.borrow().view_rect();
+        let size = (shown.width as u32, shown.height as u32);
+        let mut view = self.view.borrow_mut();
+        view.layout = chrome::layout(client, size, scale);
+        view.shown = shown;
+        drop(view);
         self.move_tooltips();
         window::invalidate_all(self.hwnd());
     }
@@ -265,6 +277,30 @@ impl Editor {
     }
 
     fn apply(&self, changes: Changes) {
+        let (shown, cropping) = {
+            let state = self.state.borrow();
+            (state.view_rect(), state.tool() == Tool::Crop)
+        };
+        if cropping != self.view.borrow().cropping {
+            self.view.borrow_mut().cropping = cropping;
+            let s = strings::get();
+            let hint = if cropping {
+                s.crop_hint()
+            } else {
+                s.editor_hint()
+            };
+            self.set_status(hint.to_string());
+        }
+        // Entering or leaving the crop tool, or undoing a crop, changes what is shown.
+        if shown != self.view.borrow().shown {
+            self.relayout();
+            return;
+        }
+        // The size in the status bar follows the crop.
+        if changes.image && cropping {
+            let status = self.view.borrow().layout.status;
+            window::invalidate(self.hwnd(), status);
+        }
         if changes.image {
             self.invalidate_image();
         }
@@ -309,7 +345,7 @@ impl Editor {
             let target = layout.image_pixels();
             if state.has_overlay() {
                 let mut frame = composite.clone();
-                state.render_overlay(&mut frame, zoom_of(composite, state.image()));
+                state.render_overlay(&mut frame, zoom_of(composite, view.shown));
                 gdi::draw_bitmap(back_dc.hdc(), target, &frame);
             } else {
                 gdi::draw_bitmap(back_dc.hdc(), target, composite);
@@ -318,7 +354,8 @@ impl Editor {
 
         // Texts.
         let subtle = rgb(chrome::SUBTLE_FOREGROUND);
-        let size_text = format!("{} × {}", state.image().width(), state.image().height());
+        let (out_w, out_h) = state.output_size();
+        let size_text = format!("{out_w} × {out_h}");
         let text_font = &view.fonts.text;
         let left = layout.status_left();
         gdi::draw_text(
@@ -366,25 +403,32 @@ impl Editor {
         let mut view = self.view.borrow_mut();
         let shown = view.layout.image_pixels();
         let size = (shown.width.max(1), shown.height.max(1));
-        let key = (state.revision(), state.live_id(), size);
+        let part = view.shown;
+        let key = (state.revision(), state.live_id(), part, size);
         if view.composite.as_ref().map(|(k, _)| *k) == Some(key) {
             return;
         }
 
-        if view.scaled_image.as_ref().map(|(s, _)| *s) != Some(size) {
+        if view.scaled_image.as_ref().map(|(s, _)| *s) != Some((part, size)) {
             let image = state.image();
-            let scaled = if size == (image.width() as i32, image.height() as i32) {
+            let full = IRect::new(0, 0, image.width() as i32, image.height() as i32);
+            let source = if part == full {
                 image.clone()
             } else {
-                gdi::scale_bitmap(image, size.0, size.1).unwrap_or_else(|_| image.clone())
+                image.crop(part)
             };
-            view.scaled_image = Some((size, scaled));
+            let scaled = if size == (part.width, part.height) {
+                source
+            } else {
+                gdi::scale_bitmap(&source, size.0, size.1).unwrap_or(source)
+            };
+            view.scaled_image = Some(((part, size), scaled));
         }
         let Some((_, scaled)) = &view.scaled_image else {
             return;
         };
         let mut composite = scaled.clone();
-        let zoom = zoom_of(&composite, state.image());
+        let zoom = zoom_of(&composite, part);
         state.draw_committed(&mut composite, key.1, zoom);
         view.composite = Some((key, composite));
     }
@@ -417,7 +461,7 @@ impl Editor {
 
     fn mouse_move(&self, p: (i32, i32)) {
         if self.state.borrow().is_dragging() {
-            let point = self.view.borrow().layout.to_image(p);
+            let point = self.view.borrow().to_image(p);
             let changes = self.state.borrow_mut().mouse_move(point);
             self.apply(changes);
             return;
@@ -442,7 +486,7 @@ impl Editor {
             (
                 view.layout.button_at(p),
                 view.layout.image_contains(p),
-                view.layout.to_image(p),
+                view.to_image(p),
             )
         };
         if let Some(button) = button {
@@ -481,13 +525,18 @@ impl Editor {
         let cursor = match view.layout.button_at(p) {
             Some(button) if self.toolbar_state().is_enabled(button) => IDC_HAND,
             Some(_) => IDC_ARROW,
-            None if state.is_dragging() => IDC_CROSS,
-            None if view.layout.image_contains(p) => match state.cursor_at(view.layout.to_image(p))
-            {
-                Cursor::Hand => IDC_HAND,
-                Cursor::Move => IDC_SIZEALL,
-                Cursor::Cross => IDC_CROSS,
-            },
+            None if state.is_dragging() && state.tool() != Tool::Crop => IDC_CROSS,
+            None if state.is_dragging() || view.layout.image_contains(p) => {
+                match state.cursor_at(view.to_image(p)) {
+                    Cursor::Hand => IDC_HAND,
+                    Cursor::Move => IDC_SIZEALL,
+                    Cursor::Cross => IDC_CROSS,
+                    Cursor::Resize(ResizeCursor::NwSe) => IDC_SIZENWSE,
+                    Cursor::Resize(ResizeCursor::NeSw) => IDC_SIZENESW,
+                    Cursor::Resize(ResizeCursor::WE) => IDC_SIZEWE,
+                    Cursor::Resize(ResizeCursor::NS) => IDC_SIZENS,
+                }
+            }
             None => IDC_ARROW,
         };
         window::set_cursor(cursor);
@@ -534,6 +583,7 @@ impl Editor {
                     let mut state = self.state.borrow_mut();
                     match other {
                         Command::Delete => state.delete_selected(),
+                        Command::Confirm => state.confirm(),
                         Command::Undo => state.undo(),
                         Command::Redo => state.redo(),
                         Command::Tool(tool) => state.select_tool(tool),
@@ -613,6 +663,7 @@ fn tooltip_text(button: Button) -> &'static str {
         Button::Tool(Tool::Highlight) => s.tool_highlight(),
         Button::Tool(Tool::Pixelate) => s.tool_pixelate(),
         Button::Tool(Tool::Number) => s.tool_number(),
+        Button::Tool(Tool::Crop) => s.tool_crop(),
         Button::Color(index) => s.colors()[index],
         Button::Undo => s.undo(),
         Button::Redo => s.redo(),
@@ -621,7 +672,15 @@ fn tooltip_text(button: Button) -> &'static str {
     }
 }
 
-/// How much smaller the shown image is than the screenshot.
-fn zoom_of(shown: &Bitmap, image: &Bitmap) -> f32 {
-    shown.width() as f32 / image.width() as f32
+/// How much smaller the shown image is than the part of the screenshot it shows.
+fn zoom_of(shown: &Bitmap, part: IRect) -> f32 {
+    shown.width() as f32 / part.width as f32
+}
+
+impl View {
+    /// Client pixel → image pixel, for the part of the image that is shown.
+    fn to_image(&self, p: (i32, i32)) -> Point {
+        let q = self.layout.to_image(p);
+        Point::new(q.x + self.shown.x as f64, q.y + self.shown.y as f64)
+    }
 }

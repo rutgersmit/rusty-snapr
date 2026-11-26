@@ -29,11 +29,20 @@ pub fn draw_annotations_scaled<'a>(
     annotations: impl IntoIterator<Item = &'a Annotation>,
     zoom: f32,
 ) {
+    draw_annotations_transformed(target, annotations, Transform::from_scale(zoom, zoom));
+}
+
+/// Draws annotations onto a bitmap, mapping image pixels with `transform` (a uniform scale and a
+/// translation, such as for a cropped view).
+pub fn draw_annotations_transformed<'a>(
+    target: &mut Bitmap,
+    annotations: impl IntoIterator<Item = &'a Annotation>,
+    transform: Transform,
+) {
     let (width, height) = (target.width(), target.height());
     let Some(mut pixmap) = PixmapMut::from_bytes(target.pixels_mut(), width, height) else {
         return;
     };
-    let transform = Transform::from_scale(zoom, zoom);
     for annotation in annotations {
         annotation.render(&mut pixmap, transform);
     }
